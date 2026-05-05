@@ -1,0 +1,31 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+# orchestrator.py uses only Python standard-library modules.
+# No pip packages are required.
+#
+#   json, os, subprocess, sys, pathlib, time  — all built-in
+#
+# Minimum Python version: 3.9
+#   (required for the tuple[str, str, str] type-hint syntax in orchestrator.py)
+
+# ── System tools (must be installed separately) ───────────────────────────────
+#
+#   1. Python 3.9+
+#      https://www.python.org/downloads/
+#
+#   2. Terraform CLI >= 1.5
+#      https://developer.hashicorp.com/terraform/install
+#
+#   3. Azure CLI (az)
+#      https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+#      Required for Phase 4 connectivity test (az vm run-command invoke)
+#
+#   4. AWS credentials exported as environment variables:
+#      export AWS_ACCESS_KEY_ID=...
+#      export AWS_SECRET_ACCESS_KEY=...
+#      export AWS_DEFAULT_REGION=ap-southeast-2
+#
+#   5. Azure login (run once before orchestrator.py):
+#      az login
+#      — or for CI/CD —
+#      az login --service-principal -u $ARM_CLIENT_ID -p $ARM_CLIENT_SECRET --tenant $ARM_TENANT_ID
+#      export ARM_SUBSCRIPTION_ID=...

@@ -1,0 +1,15 @@
+# Terraform state — contains sensitive outputs including the VPN pre-shared key
+*.tfstate
+*.tfstate.backup
+
+# Runtime-injected variable files written by orchestrator.py
+# The Phase 3 Azure tfvars contains the AWS-generated PSK — never commit this
+**/terraform.tfvars
+
+# Terraform provider plugin downloads (large binaries, not source code)
+**/.terraform/
+**/.terraform.lock.hcl
+
+# Python
+__pycache__/
+*.pyc
