@@ -234,44 +234,6 @@ This AMI ID is region-specific and will become outdated as AWS releases new AMI 
 
 ---
 
-## What You Should Also Add
-
-### 1. `.gitignore` — critical before pushing to GitHub
-
-The orchestrator writes `terraform.tfvars` files at runtime. The Phase 3 Azure tfvars file **contains the VPN pre-shared key**. You must gitignore these files:
-
-```gitignore
-# Terraform state (contains sensitive outputs including the PSK)
-*.tfstate
-*.tfstate.backup
-
-# Runtime-injected variable files (contain PSK in Phase 3)
-**/terraform.tfvars
-
-# Provider plugins (large binary downloads)
-**/.terraform/
-**/.terraform.lock.hcl
-```
-
-### 2. Terraform remote backend (for team use)
-
-Currently both modules store state locally. If multiple people run this, state files will conflict. Add an S3 backend (AWS) or Azure Storage backend to share state safely:
-
-```hcl
-# aws/main.tf — add inside the terraform {} block
-backend "s3" {
-  bucket = "your-tfstate-bucket"
-  key    = "pliac/aws/terraform.tfstate"
-  region = "ap-southeast-2"
-}
-```
-
-### 3. A GitHub Actions workflow (for CI/CD)
-
-To run the orchestrator automatically on every push, add a `.github/workflows/deploy.yml` that sets the AWS and Azure credentials as GitHub Secrets and calls `python orchestrator.py`.
-
----
-
 ## Cost Estimate
 
 Running one full deploy costs approximately:
