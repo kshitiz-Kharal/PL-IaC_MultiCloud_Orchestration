@@ -116,18 +116,44 @@ def timed(fn, *args, **kwargs):
     return result, time.perf_counter() - t0
 
 
+PHASE_LABELS = {
+    1: "Phase 1 — Azure base (VNet + VPN Gateway + VM)",
+    2: "Phase 2 — AWS deploy (VPC + VPN connections + EC2)",
+    3: "Phase 3 — Azure IPsec connect (LNGs + connections)",
+    4: "Phase 4 — Data plane (tunnel convergence / ICMP / iperf3)",
+}
+
+
 def categorise_failure(exc: Exception) -> str:
-    """Map an exception to a short tag for the failure_type column."""
     msg = str(exc).lower()
     if isinstance(exc, subprocess.TimeoutExpired):
-        return "timeout"
+        return "timeout — subprocess exceeded time limit"
+    if isinstance(exc, RuntimeError) and "terraform apply" in msg:
+        return "terraform_apply_failed"
+    if isinstance(exc, RuntimeError) and "terraform destroy" in msg:
+        return "terraform_destroy_failed"
     if isinstance(exc, RuntimeError) and "terraform" in msg:
         return "terraform_error"
-    if isinstance(exc, (json.JSONDecodeError, KeyError, IndexError)):
-        return "api_parse_error"
+    if isinstance(exc, RuntimeError) and ("tunnel" in msg or "convergence" in msg):
+        return "tunnel_convergence_timeout"
+    if isinstance(exc, RuntimeError) and ("vm" in msg or "ready" in msg or "cloud-init" in msg):
+        return "vm_readiness_timeout"
+    if isinstance(exc, json.JSONDecodeError):
+        return "json_parse_error — malformed CLI output"
+    if isinstance(exc, KeyError):
+        return "key_error — missing field in CLI output"
+    if isinstance(exc, IndexError):
+        return "index_error — unexpected CLI output structure"
     if isinstance(exc, OSError):
-        return "os_error"
+        return "os_error — file or subprocess issue"
+    if isinstance(exc, subprocess.CalledProcessError):
+        return "subprocess_error — CLI command returned non-zero"
     return type(exc).__name__
+
+
+def format_reason(exc: Exception) -> str:
+    """Return a clean, readable failure reason (no repr clutter, truncated)."""
+    return str(exc)[:500].replace("\n", " | ")
 
 
 def run_cycle(cycle_num: int) -> dict:
@@ -202,19 +228,21 @@ def run_cycle(cycle_num: int) -> dict:
         row["success"] = True
 
     except Exception as exc:
-        row["failure_type"]   = categorise_failure(exc)
-        row["failure_reason"] = repr(exc)
         if row["t_phase1_s"] is None:
-            row["failure_phase"] = 1
+            phase_num = 1
         elif row["t_phase2_s"] is None:
-            row["failure_phase"] = 2
+            phase_num = 2
         elif row["t_phase3_s"] is None:
-            row["failure_phase"] = 3
+            phase_num = 3
         else:
-            row["failure_phase"] = 4
+            phase_num = 4
+        row["failure_phase"]  = PHASE_LABELS[phase_num]
+        row["failure_type"]   = categorise_failure(exc)
+        row["failure_reason"] = format_reason(exc)
         print(
-            f"\n[Cycle {cycle_num}] ERROR phase={row['failure_phase']} "
-            f"type={row['failure_type']}: {exc}"
+            f"\n[Cycle {cycle_num}] FAILED at {row['failure_phase']}\n"
+            f"  type:   {row['failure_type']}\n"
+            f"  reason: {row['failure_reason'][:200]}"
         )
         traceback.print_exc()
 
@@ -223,7 +251,8 @@ def run_cycle(cycle_num: int) -> dict:
             _, row["t_destroy_s"] = timed(destroy)
             row["destroy_success"] = True
         except Exception as exc:
-            row["failure_reason"] = (row["failure_reason"] or "") + f" | destroy: {repr(exc)}"
+            destroy_msg = format_reason(exc)
+            row["failure_reason"] = (row["failure_reason"] or "") + f" | destroy failed: {destroy_msg}"
             row["destroy_success"] = False
 
     row["cycle_duration_min"] = (time.perf_counter() - wall_start) / 60
