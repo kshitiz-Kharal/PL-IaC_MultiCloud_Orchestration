@@ -60,8 +60,8 @@ graph TB
   ║   └─────────────────────────────────────────────────────┘ ║ ║        ║
   ║                                                            ║ ║        ║
   ║   ┌──────────────────────┐    ● = active tunnel           ║ ║        ║
-  ║   │  Windows 11 Pro VM   │    ○ = AWS-managed HA standby  ║ ║        ║
-  ║   │  Spot · D2als_v7     │                                ║ ║        ║
+  ║   │  Ubuntu 22.04 VM     │    ○ = AWS-managed HA standby  ║ ║        ║
+  ║   │  Standard_D2s_v3     │                                ║ ║        ║
   ║   │  iperf3 CLIENT       │                                ║ ║        ║
   ║   │  (az run-command)    │                                ║ ║        ║
   ║   └──────────────────────┘                                ║ ║        ║
@@ -88,10 +88,10 @@ graph TB
   ║              └───────────────────────────────┘                       ║
   ║                                                                      ║
   ║   ┌──────────────────────┐                                           ║
-  ║   │  Windows Server EC2  │                                           ║
-  ║   │  Spot · t3.micro     │                                           ║
+  ║   │  Ubuntu 22.04 EC2    │                                           ║
+  ║   │  t3.micro            │                                           ║
   ║   │  iperf3 SERVER       │                                           ║
-  ║   │  (NSSM service)      │                                           ║
+  ║   │  (systemd service)   │                                           ║
   ║   └──────────────────────┘                                           ║
   ╚══════════════════════════════════════════════════════════════════════╝
 ```
@@ -119,50 +119,40 @@ sequenceDiagram
 
     U  ->> O  : python benchmark.py --cycles 30
 
-    rect rgb(220, 235, 255)
-        Note over O,AZ: ── Phase 1 · Deploy Azure (~25-45 min) ──
-        O  ->> AZ : write tfvars  {vm_admin_password}
-        O  ->> AZ : terraform init + apply
-        AZ -->> O : pip1, pip2  (from terraform output)
-    end
+    Note over O,AZ: Phase 1 · Deploy Azure (~25-45 min)
+    O  ->> AZ : write tfvars  {vm_admin_password}
+    O  ->> AZ : terraform init + apply
+    AZ -->> O : pip1, pip2  (from terraform output)
 
-    rect rgb(220, 255, 220)
-        Note over O,AW: ── Phase 2 · Deploy AWS (~5-10 min) ──
-        O  ->> AW : write tfvars  {pip1, pip2}
-        O  ->> AW : terraform init + apply
-        AW -->> O : 4× tunnel IPs + 4× PSKs  (from terraform output)
-    end
+    Note over O,AW: Phase 2 · Deploy AWS (~5-10 min)
+    O  ->> AW : write tfvars  {pip1, pip2}
+    O  ->> AW : terraform init + apply
+    AW -->> O : 4× tunnel IPs + 4× PSKs  (from terraform output)
 
-    rect rgb(255, 235, 200)
-        Note over O,AZ: ── Phase 3 · Complete Azure (~2-5 min) ──
-        O  ->> AZ : write tfvars  {tunnel IPs, PSKs, vpc_cidr}
-        O  ->> AZ : terraform apply
-        AZ -->> O : connection_1_created, connection_2_created
-    end
+    Note over O,AZ: Phase 3 · Complete Azure (~2-5 min)
+    O  ->> AZ : write tfvars  {tunnel IPs, PSKs, vpc_cidr}
+    O  ->> AZ : terraform apply
+    AZ -->> O : connection_1_created, connection_2_created
 
-    rect rgb(240, 220, 255)
-        Note over O,PO: ── Phase 4 · Convergence + Verification ──
-        loop every 30 s  (timeout 600 s)
-            O  ->> PO : aws ec2 describe-vpn-connections
-            PO -->> O : Conn1-T1 status · Conn2-T1 status
-        end
-        Note over O: Both primary tunnels UP ✓  record convergence_s
-        O  ->> AZ : az vm run-command  ping -n 50 <aws_vm_ip>
-        AZ -->> O : ICMP RTT min/avg/max · loss%
-        O  ->> AZ : az vm run-command  iperf3 TCP fwd 30s
-        AZ -->> O : tcp_az_to_aws_mbps · retransmissions
-        O  ->> AZ : az vm run-command  iperf3 TCP rev 30s  (-R)
-        AZ -->> O : tcp_aws_to_az_mbps
-        O  ->> AZ : az vm run-command  iperf3 UDP 30s
-        AZ -->> O : udp_mbps · jitter_ms · udp_loss_pct
+    Note over O,PO: Phase 4 · Convergence + Verification
+    loop every 30 s  (timeout 600 s)
+        O  ->> PO : aws ec2 describe-vpn-connections
+        PO -->> O : Conn1-T1 status · Conn2-T1 status
     end
+    Note over O: Both primary tunnels UP — record convergence_s
+    O  ->> AZ : az vm run-command  ping -c 50 <aws_vm_ip>
+    AZ -->> O : ICMP RTT min/avg/max · loss%
+    O  ->> AZ : az vm run-command  iperf3 TCP fwd 30s
+    AZ -->> O : tcp_az_to_aws_mbps · retransmissions
+    O  ->> AZ : az vm run-command  iperf3 TCP rev 30s  (-R)
+    AZ -->> O : tcp_aws_to_az_mbps
+    O  ->> AZ : az vm run-command  iperf3 UDP 30s
+    AZ -->> O : udp_mbps · jitter_ms · udp_loss_pct
 
-    rect rgb(255, 215, 215)
-        Note over O,AW: ── Teardown ──
-        O  ->> AZ : terraform destroy  (Azure first)
-        O  ->> AW : terraform destroy  (AWS second)
-        O  ->> U  : append row to CSV · flush to disk
-    end
+    Note over O,AW: Teardown
+    O  ->> AZ : terraform destroy  (Azure first)
+    O  ->> AW : terraform destroy  (AWS second)
+    O  ->> U  : append row to CSV · flush to disk
 ```
 
 ---
@@ -227,7 +217,7 @@ flowchart LR
 | SEM-01 | 🟠 Semantic | AWS subnet outside VPC range | AWS only fails | Both fail |
 | SEM-02 | 🟠 Semantic | GatewaySubnet `/32` (below `/27` min) | Azure only fails | Both fail |
 | RUN-01 | 🟡 Runtime | Non-existent AMI ID | AWS only fails | Both fail |
-| RUN-02 | 🟡 Runtime | Spot price below floor | AWS only fails | Both fail |
+| RUN-02 | 🟡 Runtime | Invalid availability zone (`ap-southeast-2z`) | AWS only fails | Both fail |
 | CC-01 | 🔵 Cross-cloud | VPN static route CIDR mismatch | Tunnels silently broken | Both fail |
 | CC-02 | 🔵 Cross-cloud | Azure VNet CIDR mismatch | Tunnels silently broken | Both fail |
 
@@ -264,7 +254,7 @@ automated multi-cloud orchestrator/
 ├── ☁️  azure/
 │   ├── main.tf                  VNet, active-active VPN GW (pip1+pip2),
 │   │                            2×LNG + 2×IPsec Connection (conditional, Phase 3)
-│   │                            Windows 11 VM + CustomScriptExtension (iperf3)
+│   │                            Ubuntu 22.04 VM Standard_D2s_v3 (iperf3 client)
 │   ├── variables.tf             aws_tunnel_ip/2, aws_preshared_key/2,
 │   │                            vm_admin_password (sensitive, no default)
 │   └── outputs.tf               vpn_gateway_public_ip_1/2,
@@ -273,7 +263,7 @@ automated multi-cloud orchestrator/
 ├── ☁️  aws/
 │   ├── main.tf                  VPC, IGW, route table,
 │   │                            2×Customer GW, 2×VPN Connection,
-│   │                            Windows EC2 Spot (NSSM iperf3 server)
+│   │                            Ubuntu 22.04 t3.micro (systemd iperf3 server)
 │   ├── variables.tf             azure_gateway_ip, azure_gateway_ip_2, CIDRs
 │   └── outputs.tf               4× tunnel IPs, 4× PSKs,
 │                                2× VPN connection IDs, vpc_cidr
@@ -284,8 +274,11 @@ automated multi-cloud orchestrator/
 │                                No Python orchestration. No state isolation.
 │
 ├── 🤖  .github/workflows/
-│   └── daily_benchmark.yml      Runs 1 cycle/day at randomised time,
-│                                commits results back to repo
+│   ├── pliac.yml                Manual trigger — custom cycle counts for both experiments
+│   ├── benchmark-daily.yml      1 benchmark cycle/day at random time (02:00–04:00 UTC),
+│   │                            auto-stops after 30 cycles, commits CSV to repo
+│   └── inject-daily.yml         1 fault-injection cycle/day at random time (07:00–09:00 UTC),
+│                                auto-stops after 15 cycles, commits CSV to repo
 │
 ├── 📁  data/                    CSV output — committed to git
 │   ├── exp1_steady_state_YYYY-MM-DD.csv
@@ -325,9 +318,8 @@ pip install -r requirements.txt
 Step 1 ──── AWS credentials
 Step 2 ──── Azure credentials + subscription
 Step 3 ──── VM admin password (env variable)
-Step 4 ──── Accept Windows 11 marketplace terms
-Step 5 ──── Initialise Terraform modules
-Step 6 ──── Validate everything
+Step 4 ──── Initialise Terraform modules
+Step 5 ──── Validate everything
 ```
 
 ### Step 1 — AWS credentials
@@ -379,16 +371,7 @@ $env:AZURE_VM_PASSWORD = "YourPassword!2026"
 
 > ⚠️ Azure complexity rules: minimum 12 characters, must include uppercase, lowercase, number, and symbol.
 
-### Step 4 — Accept Windows 11 Marketplace terms (once per subscription)
-
-```bash
-az vm image terms accept \
-  --publisher MicrosoftWindowsDesktop \
-  --offer Windows-11 \
-  --plan win11-24h2-pro
-```
-
-### Step 5 — Initialise Terraform modules
+### Step 4 — Initialise Terraform modules
 
 ```bash
 cd azure    && terraform init && cd ..
@@ -396,7 +379,7 @@ cd aws      && terraform init && cd ..
 cd monolith && terraform init && cd ..
 ```
 
-### Step 6 — Validate the full setup
+### Step 5 — Validate the full setup
 
 ```bash
 python validate.py
@@ -490,16 +473,20 @@ data/                           data/                       results/figures/
 
 ```mermaid
 flowchart TD
-    SCHED(["⏰ Cron: midnight UTC\n+ random 0-4 h offset"])
-    SCHED --> CHK[Checkout repo]
-    CHK --> TOOLS[Install Python · Terraform\nAzure CLI · pip packages]
-    TOOLS --> AUTH[az login\nService Principal]
-    AUTH --> TERMS[Accept Win11\nMarketplace terms]
-    TERMS --> RUN["python benchmark.py --cycles 1\n~1.5-2.5 hours"]
-    RUN -->|success| COMMIT["git add data/\ngit commit\ngit push"]
-    RUN -->|failure| DESTROY["🚨 Emergency destroy\npython orchestrator.py --destroy"]
-    COMMIT --> DONE([✅ Done · CSV updated in repo])
-    DESTROY --> DONE2([⚠️ Done · row missing · resources cleaned])
+    B(["⏰ benchmark-daily.yml\n02:00 UTC + random 0-2 h"])
+    I(["⏰ inject-daily.yml\n07:00 UTC + random 0-2 h"])
+
+    B --> BCHK[Checkout repo]
+    BCHK --> BCOUNT{30 cycles\nalready done?}
+    BCOUNT -->|yes| BSKIP([Skip — target reached])
+    BCOUNT -->|no| BRUN["python benchmark.py --cycles 1\n~30 min"]
+    BRUN -->|always| BCOMMIT["git add data/exp1_*.csv\ngit commit + push"]
+
+    I --> ICHK[Checkout repo]
+    ICHK --> ICOUNT{15 cycles\nalready done?}
+    ICOUNT -->|yes| ISKIP([Skip — target reached])
+    ICOUNT -->|no| IRUN["python inject.py --cycles 1\n~90 min"]
+    IRUN -->|always| ICOMMIT["git add data/exp2_*.csv\ngit commit + push"]
 ```
 
 ### Required GitHub Secrets
@@ -516,17 +503,18 @@ Navigate to: **Repository → Settings → Secrets and variables → Actions →
 | `ARM_CLIENT_SECRET` | Service principal client secret |
 | `AZURE_VM_PASSWORD` | VM admin password (complexity rules apply) |
 
-### Controlling the workflow
+### Controlling the workflows
 
 | Action | How |
 |---|---|
-| ▶️ Start automated collection | Push `daily_benchmark.yml` to main — schedule activates automatically |
-| ⏸ Pause | GitHub → Actions → daily_benchmark → `···` → **Disable workflow** |
+| ▶️ Start automated collection | Push the workflow files to main — schedules activate automatically |
+| ⏸ Pause benchmark | GitHub → Actions → `Benchmark — 1 cycle daily` → `···` → **Disable workflow** |
+| ⏸ Pause inject | GitHub → Actions → `Fault Injection — 1 cycle daily` → `···` → **Disable workflow** |
 | ▶️ Resume | Same menu → **Enable workflow** |
-| 🖐 Manual run now | GitHub → Actions → daily_benchmark → **Run workflow** |
-| 🔍 View data | `data/exp1_steady_state_YYYY-MM-DD.csv` in the repository |
+| 🖐 Manual multi-cycle run | GitHub → Actions → `PL-IaC Experiments` → **Run workflow** |
+| 🔍 View accumulated data | `data/` directory in the repository |
 
-> Each run appends one row. After 30 days of automated runs you will have 30 independent data points ready for `analysis.py`.
+> Each daily run appends one row. After 30 days you will have 30 independent benchmark data points, and after 15 days 15 fault-injection data points, ready for `analysis.py`.
 
 ---
 
@@ -544,9 +532,9 @@ Navigate to: **Repository → Settings → Secrets and variables → Actions →
 | **VPN Connections** | 2 (primary + backup) | 2 (primary + backup) |
 | **BGP ASN** | 65000 (both CGWs) | 65000 |
 | **Routing** | Static | Route-based |
-| **Test VM OS** | Windows Server · Spot · t3.micro | Windows 11 Pro · Spot · D2als_v7 |
-| **iperf3 role** | Server — NSSM Windows service | Client — triggered via az run-command |
-| **VM password source** | N/A (AWS key pair) | `AZURE_VM_PASSWORD` env var |
+| **Test VM OS** | Ubuntu 22.04 LTS · t3.micro | Ubuntu 22.04 LTS · Standard_D2s_v3 |
+| **iperf3 role** | Server — systemd service | Client — triggered via az run-command |
+| **VM password source** | N/A (no key pair; password auth disabled) | `AZURE_VM_PASSWORD` env var |
 
 ---
 
@@ -557,8 +545,7 @@ Navigate to: **Repository → Settings → Secrets and variables → Actions →
 | Warning | Detail |
 |---|---|
 | 🔓 **Open NSG / Security Group** | All inbound/outbound traffic allowed (`0.0.0.0/0`) so ICMP and iperf3 work without interference. Restrict to minimum CIDRs and ports in production. |
-| 🔥 **Windows Firewall disabled** | Both VMs disable the Windows Firewall during provisioning so ICMP replies work immediately. In production, keep the firewall enabled and add specific ICMP inbound rules. |
-| 🖼 **Hardcoded AMI ID** | `ami-094281959696a6b6c` is region-specific (ap-southeast-2) and will expire when AWS deprecates it. Replace with the latest Windows Server AMI for ap-southeast-2 from the AWS Console if apply fails. |
+| 🖼 **Hardcoded AMI ID** | `ami-0111f46977d33b84b` (Ubuntu 22.04, ap-southeast-2) will expire when AWS deprecates it. Replace with the current Ubuntu 22.04 LTS AMI for ap-southeast-2 if apply fails. |
 | 🔑 **Monolith baseline password** | `monolith/main.tf` has a hardcoded `admin_password` because the monolith is purely a comparison baseline used by `inject.py` — it is never deployed outside of Experiment 2. |
 
 ---
@@ -569,9 +556,9 @@ Navigate to: **Repository → Settings → Secrets and variables → Actions →
 |---|---|---|
 | Azure VPN GW takes 25–45 min to provision | Phase 1 is the dominant cost in every cycle | Fixed Azure platform constraint; no workaround |
 | Spot instance eviction | ICMP/iperf3 columns may be `null` for that cycle | Provisioning timing data is still recorded; cycle is not lost |
-| `Standard_D2als_v7` availability | Azure apply fails on VM if size unavailable | Change to `Standard_D2s_v3` in `azure/main.tf` |
+| `Standard_D2s_v3` availability | Azure apply fails on VM if size unavailable in zone | Change to another D-series v3 size in `azure/main.tf` |
 | Local Terraform state only | Manual cleanup needed if interrupted mid-cycle | Run `python orchestrator.py --destroy` to recover |
-| AWS AMI may be deprecated | EC2 apply fails with "AMI not found" | Replace AMI ID with current Windows Server for ap-southeast-2 |
+| AWS AMI may be deprecated | EC2 apply fails with "AMI not found" | Replace AMI ID with current Ubuntu 22.04 LTS for ap-southeast-2 |
 
 ---
 
