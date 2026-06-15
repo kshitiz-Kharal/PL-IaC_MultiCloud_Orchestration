@@ -1,31 +1,37 @@
-# ── Python ────────────────────────────────────────────────────────────────────
-# orchestrator.py uses only Python standard-library modules.
-# No pip packages are required.
-#
-#   json, os, subprocess, sys, pathlib, time  — all built-in
-#
-# Minimum Python version: 3.9
-#   (required for the tuple[str, str, str] type-hint syntax in orchestrator.py)
+# ── Python packages (analysis.py only) ───────────────────────────────────────
+# orchestrator.py, benchmark.py, inject.py — standard library only.
+# Install analysis dependencies with:
+#   pip install -r requirements.txt
 
-# ── System tools (must be installed separately) ───────────────────────────────
+numpy>=1.24
+pandas>=2.0
+scipy>=1.11
+matplotlib>=3.7
+
+# ── Minimum Python version ────────────────────────────────────────────────────
+# Python 3.9+ required (tuple[str, str] type-hint syntax in orchestrator.py)
+
+# ── System tools (install separately) ────────────────────────────────────────
 #
-#   1. Python 3.9+
-#      https://www.python.org/downloads/
+#   1. Python 3.9+       https://www.python.org/downloads/
+#   2. Terraform >= 1.5  https://developer.hashicorp.com/terraform/install
+#   3. Azure CLI (az)    https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+#      — needed for az vm run-command invoke (Phase 4)
 #
-#   2. Terraform CLI >= 1.5
-#      https://developer.hashicorp.com/terraform/install
+#   4. AWS CLI v2        https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html
+#      — needed for check_tunnel_status() (aws ec2 describe-vpn-connections)
 #
-#   3. Azure CLI (az)
-#      https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
-#      Required for Phase 4 connectivity test (az vm run-command invoke)
+#   5. AWS credentials as environment variables:
+#        $env:AWS_ACCESS_KEY_ID     = "..."
+#        $env:AWS_SECRET_ACCESS_KEY = "..."
+#        $env:AWS_DEFAULT_REGION    = "ap-southeast-2"
 #
-#   4. AWS credentials exported as environment variables:
-#      export AWS_ACCESS_KEY_ID=...
-#      export AWS_SECRET_ACCESS_KEY=...
-#      export AWS_DEFAULT_REGION=ap-southeast-2
+#   6. Azure credentials (interactive login for local runs):
+#        az login
+#        $env:ARM_SUBSCRIPTION_ID  = "..."
+#        $env:AZURE_VM_PASSWORD    = "ResearchLab!2026"
 #
-#   5. Azure login (run once before orchestrator.py):
-#      az login
-#      — or for CI/CD —
-#      az login --service-principal -u $ARM_CLIENT_ID -p $ARM_CLIENT_SECRET --tenant $ARM_TENANT_ID
-#      export ARM_SUBSCRIPTION_ID=...
+#      For GitHub Actions, use a service principal instead:
+#        az ad sp create-for-rbac --name pliac-ci --role Contributor \
+#          --scopes /subscriptions/<SUBSCRIPTION_ID> --output json
+#        Set ARM_CLIENT_ID, ARM_CLIENT_SECRET, ARM_TENANT_ID as repo secrets.

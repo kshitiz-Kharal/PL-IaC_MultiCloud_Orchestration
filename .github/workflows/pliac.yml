@@ -1,0 +1,229 @@
+name: PL-IaC Experiments
+
+# Manual trigger only — these runs cost real money and take hours.
+# For a quick smoke test, keep cycles at 1.
+# For the full dataset (30 + 15 cycles), run locally or on a self-hosted runner:
+#   GitHub-hosted runners time out at 6 hours; 30 benchmark cycles ≈ 15 hours.
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_cycles:
+        description: "Exp 1 — steady-state cycles (1 cycle ≈ 30 min; max ~11 before 6h timeout)"
+        required: true
+        default: "5"
+      inject_cycles:
+        description: "Exp 2 — fault-injection cycles (1 cycle ≈ 20 min per fault × 2 conditions)"
+        required: true
+        default: "5"
+      seed:
+        description: "RNG seed for reproducible fault selection"
+        required: true
+        default: "42"
+
+# ── Shared credentials ────────────────────────────────────────────────────────
+# All jobs inherit these.  Set the corresponding secrets in:
+#   Repo → Settings → Secrets and variables → Actions → New repository secret
+#
+#   AZURE_VM_PASSWORD     — password for the test VMs (ResearchLab!2026 or similar)
+#   ARM_SUBSCRIPTION_ID   — az account show --query id -o tsv
+#   ARM_CLIENT_ID         — service principal appId
+#   ARM_CLIENT_SECRET     — service principal password
+#   ARM_TENANT_ID         — az account show --query tenantId -o tsv
+#   AWS_ACCESS_KEY_ID     — IAM user or role key
+#   AWS_SECRET_ACCESS_KEY — IAM user or role secret
+#
+# To create the Azure service principal (once):
+#   az ad sp create-for-rbac --name pliac-ci --role Contributor \
+#     --scopes /subscriptions/<SUBSCRIPTION_ID> --output json
+# Copy appId → ARM_CLIENT_ID, password → ARM_CLIENT_SECRET, tenant → ARM_TENANT_ID
+env:
+  AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION:    ap-southeast-2
+  ARM_SUBSCRIPTION_ID:   ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  ARM_CLIENT_ID:         ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET:     ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID:         ${{ secrets.ARM_TENANT_ID }}
+  AZURE_VM_PASSWORD:     ${{ secrets.AZURE_VM_PASSWORD }}
+
+# ── Job 1: Pre-flight validation ──────────────────────────────────────────────
+jobs:
+  validate:
+    name: Pre-flight validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure CLI login (service principal)
+        run: |
+          az login --service-principal \
+            -u "$ARM_CLIENT_ID" \
+            -p "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID"
+
+      - name: terraform init — azure
+        run: terraform init -input=false
+        working-directory: azure
+
+      - name: terraform init — aws
+        run: terraform init -input=false
+        working-directory: aws
+
+      - name: terraform init — monolith
+        run: terraform init -input=false
+        working-directory: monolith
+
+      - name: Run validate.py
+        run: python validate.py
+
+# ── Job 2: Experiment 1 — Steady-State Benchmark ─────────────────────────────
+  experiment-1:
+    name: "Exp 1 — Steady-State (${{ github.event.inputs.benchmark_cycles }} cycles)"
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 350    # hard ceiling; 11 cycles × ~30 min fits; 30 cycles needs local
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure CLI login
+        run: |
+          az login --service-principal \
+            -u "$ARM_CLIENT_ID" \
+            -p "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID"
+
+      - name: terraform init
+        run: |
+          terraform -chdir=azure init -input=false
+          terraform -chdir=aws   init -input=false
+
+      - name: Run benchmark
+        run: python benchmark.py --cycles ${{ github.event.inputs.benchmark_cycles }}
+
+      # Upload even on failure — CSV is append-only so partial runs are usable.
+      - name: Upload Exp 1 CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exp1-data
+          path: data/exp1_steady_state_*.csv
+          if-no-files-found: warn
+
+# ── Job 3: Experiment 2 — Fault Injection ────────────────────────────────────
+# Runs after Exp 1 (not in parallel) to avoid simultaneous full-stack deploys
+# competing for Azure VPN Gateway quota (only 1 VpnGw1AZ per region by default).
+  experiment-2:
+    name: "Exp 2 — Fault Injection (${{ github.event.inputs.inject_cycles }} cycles)"
+    needs: experiment-1
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure CLI login
+        run: |
+          az login --service-principal \
+            -u "$ARM_CLIENT_ID" \
+            -p "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID"
+
+      - name: terraform init
+        run: |
+          terraform -chdir=azure    init -input=false
+          terraform -chdir=aws      init -input=false
+          terraform -chdir=monolith init -input=false
+
+      - name: Run fault injection
+        run: |
+          python inject.py \
+            --cycles ${{ github.event.inputs.inject_cycles }} \
+            --seed   ${{ github.event.inputs.seed }}
+
+      - name: Upload Exp 2 CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exp2-data
+          path: data/exp2_fault_injection_*.csv
+          if-no-files-found: warn
+
+# ── Job 4: Analysis + Figures ─────────────────────────────────────────────────
+  analyse:
+    name: Analysis and figures
+    needs: [experiment-1, experiment-2]
+    runs-on: ubuntu-latest
+    # Run even if one experiment failed — analysis.py handles missing CSV gracefully.
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download Exp 1 CSV
+        uses: actions/download-artifact@v4
+        with:
+          name: exp1-data
+          path: data/
+        continue-on-error: true   # analysis still runs if only Exp 2 succeeded
+
+      - name: Download Exp 2 CSV
+        uses: actions/download-artifact@v4
+        with:
+          name: exp2-data
+          path: data/
+        continue-on-error: true
+
+      - name: Run analysis
+        run: python analysis.py
+
+      - name: Upload figures
+        uses: actions/upload-artifact@v4
+        with:
+          name: figures
+          path: results/figures/
+          if-no-files-found: warn

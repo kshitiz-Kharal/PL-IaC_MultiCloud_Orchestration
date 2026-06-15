@@ -38,13 +38,27 @@ resource "azurerm_subnet" "gateway" {
   address_prefixes     = [var.gateway_subnet_cidr]
 }
 
-resource "azurerm_public_ip" "vpn_gw" {
-  name                = "pliac-vpn-gw-pip"
+# ── Active-Active VPN Gateway — two public IPs ────────────────────────────────
+# Active-active mode provides two simultaneous IPsec endpoints (one per IP).
+# Each AWS Customer Gateway points to one of these IPs — no BGP ASN workaround
+# is needed because the two IPs are genuinely distinct at the network layer.
+
+resource "azurerm_public_ip" "vpn_gw_1" {
+  name                = "pliac-vpn-gw-pip1"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  zones               = ["1", "2", "3"] #Zone Redundancy
+  zones               = ["1", "2", "3"]
+}
+
+resource "azurerm_public_ip" "vpn_gw_2" {
+  name                = "pliac-vpn-gw-pip2"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  zones               = ["1", "2", "3"]
 }
 
 resource "azurerm_virtual_network_gateway" "main" {
@@ -54,46 +68,77 @@ resource "azurerm_virtual_network_gateway" "main" {
   type                = "Vpn"
   vpn_type            = "RouteBased"
   sku                 = "VpnGw1AZ"
-  active_active       = false
+  active_active       = true # enables two simultaneous active connections
   enable_bgp          = false
 
   ip_configuration {
-    name                          = "gwConfig"
-    public_ip_address_id          = azurerm_public_ip.vpn_gw.id
+    name                          = "gwConfig1"
+    public_ip_address_id          = azurerm_public_ip.vpn_gw_1.id
+    private_ip_address_allocation = "Dynamic"
+    subnet_id                     = azurerm_subnet.gateway.id
+  }
+
+  ip_configuration {
+    name                          = "gwConfig2"
+    public_ip_address_id          = azurerm_public_ip.vpn_gw_2.id
     private_ip_address_allocation = "Dynamic"
     subnet_id                     = azurerm_subnet.gateway.id
   }
 }
 
-# Created only in Phase 2 when the orchestrator has injected the AWS tunnel IP.
-resource "azurerm_local_network_gateway" "aws" {
+# ── Conditional Phase-3 resources ────────────────────────────────────────────
+# count = 0 during Phase 1 (no AWS tunnel details yet).
+# count = 1 during Phase 3 (orchestrator injects AWS tunnel IPs + PSKs).
+
+# Primary connection — Azure pip1 ↔ AWS VPN Connection 1 Tunnel 1
+resource "azurerm_local_network_gateway" "aws_primary" {
   count               = var.aws_tunnel_ip != "" ? 1 : 0
-  name                = "pliac-lng-aws"
+  name                = "pliac-lng-aws-primary"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   gateway_address     = var.aws_tunnel_ip
   address_space       = [var.aws_cidr]
 }
 
-resource "azurerm_virtual_network_gateway_connection" "to_aws" {
+resource "azurerm_virtual_network_gateway_connection" "to_aws_primary" {
   count                      = var.aws_tunnel_ip != "" ? 1 : 0
-  name                       = "pliac-conn-to-aws"
+  name                       = "pliac-conn-to-aws-primary"
   location                   = azurerm_resource_group.main.location
   resource_group_name        = azurerm_resource_group.main.name
   type                       = "IPsec"
   virtual_network_gateway_id = azurerm_virtual_network_gateway.main.id
-  local_network_gateway_id   = azurerm_local_network_gateway.aws[0].id
+  local_network_gateway_id   = azurerm_local_network_gateway.aws_primary[0].id
   shared_key                 = var.aws_preshared_key
 }
 
+# Backup connection — Azure pip2 ↔ AWS VPN Connection 2 Tunnel 1
+resource "azurerm_local_network_gateway" "aws_backup" {
+  count               = var.aws_tunnel_ip_2 != "" ? 1 : 0
+  name                = "pliac-lng-aws-backup"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  gateway_address     = var.aws_tunnel_ip_2
+  address_space       = [var.aws_cidr]
+}
 
-# network security group and its association
+resource "azurerm_virtual_network_gateway_connection" "to_aws_backup" {
+  count                      = var.aws_tunnel_ip_2 != "" ? 1 : 0
+  name                       = "pliac-conn-to-aws-backup"
+  location                   = azurerm_resource_group.main.location
+  resource_group_name        = azurerm_resource_group.main.name
+  type                       = "IPsec"
+  virtual_network_gateway_id = azurerm_virtual_network_gateway.main.id
+  local_network_gateway_id   = azurerm_local_network_gateway.aws_backup[0].id
+  shared_key                 = var.aws_preshared_key_2
+}
+
+# ── NSG ───────────────────────────────────────────────────────────────────────
+
 resource "azurerm_network_security_group" "open_nsg" {
   name                = "pliac-open-nsg"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
-  # Allow all inbound traffic (for testing connectivity)
   security_rule {
     name                       = "AllowAllInbound"
     priority                   = 100
@@ -106,7 +151,6 @@ resource "azurerm_network_security_group" "open_nsg" {
     destination_address_prefix = "*"
   }
 
-  # Allow all outbound traffic
   security_rule {
     name                       = "AllowAllOutbound"
     priority                   = 100
@@ -120,13 +164,18 @@ resource "azurerm_network_security_group" "open_nsg" {
   }
 }
 
-# Associate the NSG with your network interface
-resource "azurerm_network_interface_security_group_association" "test" {
-  network_interface_id      = azurerm_network_interface.test_nic.id
-  network_security_group_id = azurerm_network_security_group.open_nsg.id
+# ── Test VM public IP ─────────────────────────────────────────────────────────
+# Required for outbound internet access (Azure default outbound SNAT retired
+# Sep 2025). The VM uses this so cloud-init can run apt-get install iperf3.
+
+resource "azurerm_public_ip" "test_vm" {
+  name                = "pliac-vm-pip"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
 }
 
-# nsg association
 resource "azurerm_network_interface" "test_nic" {
   name                = "pliac-azure-nic"
   location            = azurerm_resource_group.main.location
@@ -136,24 +185,36 @@ resource "azurerm_network_interface" "test_nic" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.main.id
     private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.test_vm.id
   }
 }
 
-# virtual machine
-resource "azurerm_windows_virtual_machine" "test_vm" {
-  name                = "pliac-win-vm"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  size                = "Standard_D2als_v7" # The cheapest size from your search
-  admin_username      = "azureuser"
-  admin_password      = "ResearchLab!2026"
+resource "azurerm_network_interface_security_group_association" "test" {
+  network_interface_id      = azurerm_network_interface.test_nic.id
+  network_security_group_id = azurerm_network_security_group.open_nsg.id
+}
 
-  # ── Spot Configuration ──────────────────────────────────────────────────
-  priority        = "Spot"
-  eviction_policy = "Deallocate" 
-  # max_bid_price   = -1 # Pay up to the standard price to stay running
+# ── Test VM ───────────────────────────────────────────────────────────────────
+# Ubuntu 22.04 LTS — acts as the iperf3 CLIENT only.
+# cloud-init installs iperf3 at first boot (~60-90 s total).
+# The orchestrator triggers tests via az vm run-command invoke (RunShellScript).
 
-  network_interface_ids = [azurerm_network_interface.test_nic.id]
+resource "azurerm_linux_virtual_machine" "test_vm" {
+  name                            = "pliac-az-vm"
+  resource_group_name             = azurerm_resource_group.main.name
+  location                        = azurerm_resource_group.main.location
+  size                            = "Standard_D2s_v3"
+  admin_username                  = "azureuser"
+  admin_password                  = var.vm_admin_password
+  disable_password_authentication = false
+  network_interface_ids           = [azurerm_network_interface.test_nic.id]
+
+  custom_data = base64encode(<<-INIT
+    #!/bin/bash
+    apt-get update -y
+    apt-get install -y iperf3
+    INIT
+  )
 
   os_disk {
     caching              = "ReadWrite"
@@ -161,14 +222,9 @@ resource "azurerm_windows_virtual_machine" "test_vm" {
   }
 
   source_image_reference {
-    publisher = "MicrosoftWindowsDesktop"
-    offer     = "Windows-11"
-    sku       = "win11-24h2-pro"
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts"
     version   = "latest"
   }
-}
-
-output "azure_vm_private_ip" {
-  description = "Private IP of the Azure Windows VM"
-  value       = azurerm_network_interface.test_nic.private_ip_address
 }

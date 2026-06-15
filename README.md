@@ -1,138 +1,385 @@
-# Hybrid PL-IaC Orchestrator — Proof of Concept
+# Hybrid PL-IaC Multi-Cloud Network Orchestrator
 
-A first step towards fully automated multi-cloud orchestration. This proof-of-concept demonstrates that a lightweight Python control plane can automatically exchange live network variables between two isolated Terraform modules — replacing the manual, error-prone process of connecting decoupled cloud environments.
+> **Master's Research Artefact** — *"Hybrid PL-IaC Approach for Automated Modular Orchestration of Decoupled Multi-Cloud Networks"*
 
-The orchestrator provisions an isolated AWS VPC and an isolated Azure VNet, then dynamically extracts and injects the routing variables required to establish a secure site-to-site **IPsec VPN tunnel** between them — without any hardcoded cross-cloud secrets or manual intervention.
+A lightweight Python control plane that automatically orchestrates two isolated Terraform modules to establish **dual active-active IPsec VPN tunnels** between AWS (ap-southeast-2) and Azure (australiaeast) — with zero hardcoded cross-cloud secrets and zero manual steps.
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────┐
-│           Control Plane (Python)                │
-│                                                 │
-│  orchestrator.py — API-Driven State Manager     │
-│  1. Triggers Azure  5. Injects AWS IP & PSK     │
-│  2. Extracts Azure IP    4. Extracts AWS IP & PSK│
-│  3. Injects Azure IP & Triggers AWS             │
-└──────────┬──────────────────────┬───────────────┘
-           │                      │
-    ┌──────▼──────┐        ┌──────▼──────┐
-    │  Terraform  │        │  Terraform  │
-    │Azure Module │        │ AWS Module  │
-    │Isolated     │        │ Isolated    │
-    │   State     │        │   State     │
-    └──────┬──────┘        └──────┬──────┘
-           │                      │
-    ┌──────▼──────────────────────▼──────┐
-    │            Data Plane              │
-    │                                    │
-    │  Azure VNet          AWS VPC       │
-    │  VPN Gateway ◄──────► VPN Gateway │
-    │  Windows VM   IPsec   Windows VM  │
-    │           Tunnel (Layer 3)         │
-    └────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph CP["🐍  Control Plane  ·  Python"]
+        ORC["orchestrator.py\n─────────────────\nPhases 1 → 4\nState bridging\nTunnel polling\nICMP + iperf3"]
+        BM["benchmark.py\n─────────────────\nExp 1 · 30 cycles\nProvisioning latency\nNetwork performance"]
+        INJ["inject.py\n─────────────────\nExp 2 · 15 cycles\nFault injection\nBlast-radius scoring"]
+        ANA["analysis.py\n─────────────────\nStatistics\nFigure generation\np95 · IQR · CI"]
+    end
+
+    subgraph EP["⚙️  Execution Plane  ·  Terraform"]
+        AZM["azure/ module\n──────────────\nisolated state\nno AWS knowledge"]
+        AWSM["aws/ module\n──────────────\nisolated state\nno Azure knowledge"]
+        MONO["monolith/ baseline\n──────────────\nshared state\nExp 2 comparison"]
+    end
+
+    subgraph DP["🌐  Data Plane"]
+        AZTUN["Azure VNet\n10.2.0.0/16\nVPN Gateway\nactive-active"]
+        AWSTUN["AWS VPC\n10.1.0.0/16\nVirtual\nPrivate GW"]
+        AZTUN <-->|"4 IPsec tunnels\nStatic routing"| AWSTUN
+    end
+
+    ORC -- "phase1: terraform apply\n→ reads pip1, pip2" --> AZM
+    ORC -- "phase2: terraform apply\n→ reads tunnel IPs + PSKs" --> AWSM
+    ORC -- "phase3: terraform apply\n← injects tunnel IPs + PSKs" --> AZM
+    AZM --> AZTUN
+    AWSM --> AWSTUN
+    BM --> ORC
+    INJ --> AZM
+    INJ --> AWSM
+    INJ --> MONO
 ```
 
-The Python script acts as the **SDN-style control plane**, while Terraform handles the **declarative execution plane**. The two Terraform modules maintain completely isolated state files — neither cloud environment has any direct knowledge of the other.
+> The two Terraform modules share **no state** and have **no direct knowledge of each other**. Python bridges them by reading outputs from one module's state file and writing them into the other's `terraform.tfvars` at runtime. Pre-shared keys travel only through Python memory — never through any file committed to source control.
 
 ---
 
-## How It Works
-
-The orchestrator runs in four sequential phases:
-
-**Phase 1 — Deploy Azure**
-Provisions the Azure VNet, workload subnet, GatewaySubnet, and VPN Gateway. Once Terraform finishes, the orchestrator reads the Gateway's public IP directly from the live Terraform state.
-
-**Phase 2 — Deploy AWS**
-Writes the Azure Gateway IP into an AWS `terraform.tfvars` file and provisions the AWS VPC, VPN Gateway, Customer Gateway (pointing at Azure), and VPN Connection. The orchestrator then reads the AWS tunnel IP and the auto-generated pre-shared key (PSK) from the live AWS state — the PSK never touches any source file.
-
-**Phase 3 — Complete Azure Connection**
-Writes the AWS tunnel IP and PSK into an Azure `terraform.tfvars` file and re-applies the Azure module. This triggers the creation of the Local Network Gateway and IPsec Connection, completing the tunnel.
-
-**Phase 4 — Data Plane Verification**
-Waits 300 seconds for the VPN handshake and Windows VMs to finish booting, then uses the Azure CLI `run-command` to instruct the Azure VM to ping the AWS VM's private IP over the tunnel.
+## Network Topology
 
 ```
-python orchestrator.py           # deploy + verify
-python orchestrator.py --destroy # tear everything down
+  ╔══════════════════════════════════════════════════════════════════════╗
+  ║   AZURE   ·   australiaeast   ·   VNet 10.2.0.0/16                  ║
+  ║                                                                      ║
+  ║   ┌─────────────────────────────────────────────────────┐            ║
+  ║   │            VPN Gateway  (active-active)              │            ║
+  ║   │                                                     │            ║
+  ║   │  pip1 ●══════ Conn1-T1 (PRIMARY ACTIVE)  ═══════════╪═══╗        ║
+  ║   │  pip1 ○┄┄┄┄┄┄ Conn1-T2 (AWS HA standby) ┄┄┄┄┄┄┄┄┄┄╪┄┄┄╢        ║
+  ║   │  pip2 ●══════ Conn2-T1 (BACKUP ACTIVE)   ═══════════╪═╗ ║        ║
+  ║   │  pip2 ○┄┄┄┄┄┄ Conn2-T2 (AWS HA standby) ┄┄┄┄┄┄┄┄┄┄╪┄╢ ║        ║
+  ║   └─────────────────────────────────────────────────────┘ ║ ║        ║
+  ║                                                            ║ ║        ║
+  ║   ┌──────────────────────┐    ● = active tunnel           ║ ║        ║
+  ║   │  Windows 11 Pro VM   │    ○ = AWS-managed HA standby  ║ ║        ║
+  ║   │  Spot · D2als_v7     │                                ║ ║        ║
+  ║   │  iperf3 CLIENT       │                                ║ ║        ║
+  ║   │  (az run-command)    │                                ║ ║        ║
+  ║   └──────────────────────┘                                ║ ║        ║
+  ╚═══════════════════════════════════════════════════════════╪═╪════════╝
+                              IPsec / IKEv1  │ │
+                              Static Routing │ │
+  ╔═════════════════════════════════════════╪═╪════════════════════════╗
+  ║   AWS   ·   ap-southeast-2   ·   VPC 10.1.0.0/16                   ║
+  ║                                        ║ ║                          ║
+  ║         ┌──────────────────────────────╜ ║                          ║
+  ║         │                               ╙──────────────────────┐   ║
+  ║         ▼                                                       ▼   ║
+  ║  ┌─────────────────┐                           ┌─────────────────┐  ║
+  ║  │  VPN Connection │                           │  VPN Connection │  ║
+  ║  │       1         │                           │       2         │  ║
+  ║  │  CGW-1 = pip1   │                           │  CGW-2 = pip2   │  ║
+  ║  │  T1 ● active    │                           │  T1 ● active    │  ║
+  ║  │  T2 ○ standby   │                           │  T2 ○ standby   │  ║
+  ║  └────────┬────────┘                           └────────┬────────┘  ║
+  ║           └──────────────────┬─────────────────────────┘            ║
+  ║                              ▼                                       ║
+  ║              ┌───────────────────────────────┐                       ║
+  ║              │   Virtual Private Gateway     │                       ║
+  ║              └───────────────────────────────┘                       ║
+  ║                                                                      ║
+  ║   ┌──────────────────────┐                                           ║
+  ║   │  Windows Server EC2  │                                           ║
+  ║   │  Spot · t3.micro     │                                           ║
+  ║   │  iperf3 SERVER       │                                           ║
+  ║   │  (NSSM service)      │                                           ║
+  ║   └──────────────────────┘                                           ║
+  ╚══════════════════════════════════════════════════════════════════════╝
 ```
+
+### Tunnel Reference
+
+| Tunnel | Azure endpoint | AWS endpoint | State | Purpose |
+|:---:|---|---|:---:|---|
+| **Conn1-T1** | pip1 | VPN Connection 1 · Tunnel 1 | 🟢 Active | Primary data path |
+| **Conn1-T2** | pip1 | VPN Connection 1 · Tunnel 2 | 🟡 Standby | AWS-managed HA backup |
+| **Conn2-T1** | pip2 | VPN Connection 2 · Tunnel 1 | 🟢 Active | Backup data path |
+| **Conn2-T2** | pip2 | VPN Connection 2 · Tunnel 2 | 🟡 Standby | AWS-managed HA backup |
+
+---
+
+## Three-Phase Orchestration
+
+```mermaid
+sequenceDiagram
+    actor U  as 👤 User / GitHub Actions
+    participant O  as orchestrator.py
+    participant AZ as azure/ (Terraform)
+    participant AW as aws/ (Terraform)
+    participant PO as AWS Tunnel Poller
+
+    U  ->> O  : python benchmark.py --cycles 30
+
+    rect rgb(220, 235, 255)
+        Note over O,AZ: ── Phase 1 · Deploy Azure (~25-45 min) ──
+        O  ->> AZ : write tfvars  {vm_admin_password}
+        O  ->> AZ : terraform init + apply
+        AZ -->> O : pip1, pip2  (from terraform output)
+    end
+
+    rect rgb(220, 255, 220)
+        Note over O,AW: ── Phase 2 · Deploy AWS (~5-10 min) ──
+        O  ->> AW : write tfvars  {pip1, pip2}
+        O  ->> AW : terraform init + apply
+        AW -->> O : 4× tunnel IPs + 4× PSKs  (from terraform output)
+    end
+
+    rect rgb(255, 235, 200)
+        Note over O,AZ: ── Phase 3 · Complete Azure (~2-5 min) ──
+        O  ->> AZ : write tfvars  {tunnel IPs, PSKs, vpc_cidr}
+        O  ->> AZ : terraform apply
+        AZ -->> O : connection_1_created, connection_2_created
+    end
+
+    rect rgb(240, 220, 255)
+        Note over O,PO: ── Phase 4 · Convergence + Verification ──
+        loop every 30 s  (timeout 600 s)
+            O  ->> PO : aws ec2 describe-vpn-connections
+            PO -->> O : Conn1-T1 status · Conn2-T1 status
+        end
+        Note over O: Both primary tunnels UP ✓  record convergence_s
+        O  ->> AZ : az vm run-command  ping -n 50 <aws_vm_ip>
+        AZ -->> O : ICMP RTT min/avg/max · loss%
+        O  ->> AZ : az vm run-command  iperf3 TCP fwd 30s
+        AZ -->> O : tcp_az_to_aws_mbps · retransmissions
+        O  ->> AZ : az vm run-command  iperf3 TCP rev 30s  (-R)
+        AZ -->> O : tcp_aws_to_az_mbps
+        O  ->> AZ : az vm run-command  iperf3 UDP 30s
+        AZ -->> O : udp_mbps · jitter_ms · udp_loss_pct
+    end
+
+    rect rgb(255, 215, 215)
+        Note over O,AW: ── Teardown ──
+        O  ->> AZ : terraform destroy  (Azure first)
+        O  ->> AW : terraform destroy  (AWS second)
+        O  ->> U  : append row to CSV · flush to disk
+    end
+```
+
+---
+
+## Experiments
+
+### Experiment 1 — Steady-State Performance
+
+```mermaid
+flowchart LR
+    S([▶ benchmark.py\n--cycles 30]) --> C{cycle\nremaining?}
+    C -->|yes| P1[📦 Phase 1\nAzure deploy\n25-45 min]
+    P1 --> P2[📦 Phase 2\nAWS deploy\n5-10 min]
+    P2 --> P3[📦 Phase 3\nAzure connect\n2-5 min]
+    P3 --> PO[🔄 Poll tunnels\nuntil UP\nmax 10 min]
+    PO --> NT[📡 ICMP\niperf3 TCP+UDP]
+    NT --> TD[🗑️ Destroy\nboth clouds]
+    TD --> W[💾 Write CSV row\nflush to disk]
+    W --> C
+    C -->|done| A([📊 analysis.py])
+```
+
+**CSV columns recorded per cycle** (35 total):
+
+| Category | Columns |
+|---|---|
+| ⏱ Phase timing | `t_phase1/2/3_s` · `t_phase1/2/3_prov_s` · `t_phase1/2/3_proc_s` · `t_total_*` |
+| 🔄 Convergence | `tunnel_convergence_s` |
+| 🔒 Tunnel status | `tunnel1/2/3/4_up` · `active_tunnel_count` |
+| 📡 ICMP | `icmp_rtt_min/avg/max_ms` · `icmp_packet_loss_pct` · `icmp_success` |
+| 🚀 iperf3 | `tcp_az_to_aws_mbps` · `tcp_aws_to_az_mbps` · `udp_mbps` · `jitter_ms` · `udp_loss_pct` |
+| 🗂 State isolation | `aws_state_resource_count` · `azure_state_resource_count` |
+| ❌ Failure | `failure_phase` · `failure_type` · `failure_reason` |
+| 🏷 Metadata | `cycle` · `timestamp_utc` · `run_source` · `github_run_id` |
+
+### Experiment 2 — Fault Injection
+
+```mermaid
+flowchart LR
+    S([▶ inject.py\n--cycles 15\n--seed 42]) --> CL[🔍 Scan for\nstale .bak files\nrestore if found]
+    CL --> C{cycle\nremaining?}
+    C -->|yes| R[🎲 RNG select\nfault from\ncatalogue]
+    R --> B["💾 shutil.copy2\nto .tf.bak\n(disk backup)"]
+    B --> I[💉 Inject fault\ninto .tf file]
+    I --> FW[🏗 Framework test\nDecoupled modules]
+    I --> MO[🏗 Monolith test\nShared state]
+    FW --> RS["♻️ Restore from\n.tf.bak files\n(crash-safe)"]
+    MO --> RS
+    RS --> REC[⏱ Measure\nrecovery time]
+    REC --> W[💾 Write CSV row]
+    W --> C
+    C -->|done| A([📊 analysis.py])
+```
+
+**Fault catalogue** (9 faults · 4 categories · seeded for reproducibility):
+
+| ID | Category | What breaks | Framework blast radius | Monolith blast radius |
+|:---:|:---:|---|:---:|:---:|
+| SYN-01 | 🔴 Syntax | AWS VPC CIDR `/99` (invalid prefix) | AWS only fails | Both fail |
+| SYN-02 | 🔴 Syntax | Azure VNet CIDR `10.2.0.0/999` | Azure only fails | Both fail |
+| SYN-03 | 🔴 Syntax | EC2 instance type `t99.invalid` | AWS only fails | Both fail |
+| SEM-01 | 🟠 Semantic | AWS subnet outside VPC range | AWS only fails | Both fail |
+| SEM-02 | 🟠 Semantic | GatewaySubnet `/32` (below `/27` min) | Azure only fails | Both fail |
+| RUN-01 | 🟡 Runtime | Non-existent AMI ID | AWS only fails | Both fail |
+| RUN-02 | 🟡 Runtime | Spot price below floor | AWS only fails | Both fail |
+| CC-01 | 🔵 Cross-cloud | VPN static route CIDR mismatch | Tunnels silently broken | Both fail |
+| CC-02 | 🔵 Cross-cloud | Azure VNet CIDR mismatch | Tunnels silently broken | Both fail |
+
+**Blast radius scoring**: `0` = neither cloud provisioned · `1` = one cloud provisioned · `2` = both clouds provisioned despite the fault.
+
+### Figures produced by analysis.py
+
+| Figure file | What it shows |
+|---|---|
+| `exp1_phase_breakdown.png` | Per-phase mean duration ± 95% CI bar chart |
+| `exp1_total_distribution.png` | Total provisioning time histogram with mean, median, p95 |
+| `exp1_prov_vs_proc.png` | Stacked bar: Terraform apply vs Python overhead per phase |
+| `exp1_convergence.png` | Tunnel convergence scatter over cycles + box plot |
+| `exp1_rtt_vs_threshold.png` | ICMP RTT per cycle vs ITU-T G.114 150 ms threshold |
+| `exp1_throughput.png` | iperf3 TCP bidirectional throughput per cycle |
+| `exp2_blast_radius.png` | Blast radius grouped bar: framework vs monolith |
+| `exp2_recovery_time.png` | Recovery time box plot: framework vs monolith |
 
 ---
 
 ## Project Structure
 
 ```
-├── aws/
-│   ├── main.tf        # VPC, subnet, VPN Gateway, Customer Gateway, VPN Connection
-│   ├── variables.tf   # azure_gateway_ip (injected at runtime), CIDRs
-│   └── outputs.tf     # tunnel1_address, tunnel1_preshared_key, vpc_cidr
+automated multi-cloud orchestrator/
 │
-├── azure/
-│   ├── main.tf        # VNet, GatewaySubnet, VPN Gateway, LNG + Connection (conditional)
-│   ├── variables.tf   # aws_tunnel_ip, aws_preshared_key (injected at runtime)
-│   └── outputs.tf     # vpn_gateway_public_ip, connection_created
+├── 🔧  orchestrator.py          Control plane — all 4 phases, tunnel polling,
+│                                ICMP + iperf3 tests, destroy
 │
-├── orchestrator.py    # Python control plane — all four phases
-├── requirements.txt   # No pip packages; lists system tool prerequisites
-└── README.md
+├── 📊  benchmark.py             Experiment 1 — 30-cycle steady-state benchmark
+├── 💉  inject.py                Experiment 2 — fault injection with seeded RNG
+├── 📈  analysis.py              Statistical analysis + 8 figures
+├── ✅  validate.py              Pre-flight checks (syntax, terraform, CLI, env)
+│
+├── ☁️  azure/
+│   ├── main.tf                  VNet, active-active VPN GW (pip1+pip2),
+│   │                            2×LNG + 2×IPsec Connection (conditional, Phase 3)
+│   │                            Windows 11 VM + CustomScriptExtension (iperf3)
+│   ├── variables.tf             aws_tunnel_ip/2, aws_preshared_key/2,
+│   │                            vm_admin_password (sensitive, no default)
+│   └── outputs.tf               vpn_gateway_public_ip_1/2,
+│                                connection_1/2_created, VM IPs
+│
+├── ☁️  aws/
+│   ├── main.tf                  VPC, IGW, route table,
+│   │                            2×Customer GW, 2×VPN Connection,
+│   │                            Windows EC2 Spot (NSSM iperf3 server)
+│   ├── variables.tf             azure_gateway_ip, azure_gateway_ip_2, CIDRs
+│   └── outputs.tf               4× tunnel IPs, 4× PSKs,
+│                                2× VPN connection IDs, vpc_cidr
+│
+├── 🏗  monolith/
+│   └── main.tf                  Both clouds in one file — Experiment 2 baseline.
+│                                Cross-cloud refs via Terraform dependency graph.
+│                                No Python orchestration. No state isolation.
+│
+├── 🤖  .github/workflows/
+│   └── daily_benchmark.yml      Runs 1 cycle/day at randomised time,
+│                                commits results back to repo
+│
+├── 📁  data/                    CSV output — committed to git
+│   ├── exp1_steady_state_YYYY-MM-DD.csv
+│   └── exp2_fault_injection_YYYY-MM-DD.csv
+│
+├── 📁  results/figures/         PNG plots from analysis.py
+│
+└── 📄  requirements.txt         pip packages + system tool prerequisites
 ```
 
 ---
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|---|---|---|
-| Python | 3.9+ | Run orchestrator.py |
-| Terraform CLI | 1.5+ | Provision cloud infrastructure |
-| Azure CLI (`az`) | Latest | Phase 4 connectivity test via `run-command` |
-| AWS account | — | ap-southeast-2 (Sydney) |
-| Azure account | — | Australia East |
+### System tools
 
-**Python** — https://www.python.org/downloads/  
-**Terraform** — https://developer.hashicorp.com/terraform/install  
-**Azure CLI** — https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+| Tool | Min version | Install | Used by |
+|---|---|---|---|
+| 🐍 Python | 3.9+ | [python.org](https://www.python.org/downloads/) | All scripts |
+| 🏗 Terraform CLI | 1.5+ | [hashicorp.com](https://developer.hashicorp.com/terraform/install) | All scripts |
+| ☁️ Azure CLI (`az`) | Latest | [microsoft.com](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) | Phase 4 run-command · service principal auth |
+| 🔶 AWS CLI v2 | Latest | [aws.amazon.com](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) | Phase 4 tunnel status polling |
 
-No pip packages are required. `orchestrator.py` uses only Python standard-library modules.
+### Python packages (analysis.py only)
+
+```bash
+pip install -r requirements.txt
+```
+
+`orchestrator.py`, `benchmark.py`, `inject.py`, and `validate.py` use the Python standard library only.
 
 ---
 
 ## Setup
 
-### 1. AWS credentials
+```
+Step 1 ──── AWS credentials
+Step 2 ──── Azure credentials + subscription
+Step 3 ──── VM admin password (env variable)
+Step 4 ──── Accept Windows 11 marketplace terms
+Step 5 ──── Initialise Terraform modules
+Step 6 ──── Validate everything
+```
+
+### Step 1 — AWS credentials
+
+```powershell
+# PowerShell (Windows / GitHub Actions)
+$env:AWS_ACCESS_KEY_ID     = "your-access-key"
+$env:AWS_SECRET_ACCESS_KEY = "your-secret-key"
+$env:AWS_DEFAULT_REGION    = "ap-southeast-2"
+```
 
 ```bash
+# Bash (Linux / macOS)
 export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_DEFAULT_REGION="ap-southeast-2"
 ```
 
-### 2. Azure credentials
+### Step 2 — Azure credentials
 
-```bash
+**Interactive login** (local development):
+```powershell
 az login
+$env:ARM_SUBSCRIPTION_ID = "your-subscription-id"
 ```
 
-Or with a service principal (for CI/CD):
+**Service principal** (CI/CD, GitHub Actions):
+```powershell
+# Create the service principal once
+az ad sp create-for-rbac `
+  --name "pliac-orchestrator" `
+  --role Contributor `
+  --scopes /subscriptions/<subscription-id>
+# → outputs clientId, clientSecret, tenantId
 
-```bash
-az login --service-principal \
-  -u $ARM_CLIENT_ID \
-  -p $ARM_CLIENT_SECRET \
-  --tenant $ARM_TENANT_ID
-
-export ARM_SUBSCRIPTION_ID="your-subscription-id"
-export ARM_CLIENT_ID="your-client-id"
-export ARM_CLIENT_SECRET="your-client-secret"
-export ARM_TENANT_ID="your-tenant-id"
+$env:ARM_SUBSCRIPTION_ID = "your-subscription-id"
+$env:ARM_TENANT_ID       = "your-tenant-id"
+$env:ARM_CLIENT_ID       = "your-client-id"
+$env:ARM_CLIENT_SECRET   = "your-client-secret"
 ```
 
-### 3. Accept the Windows 11 Marketplace terms (Azure — one-time)
+### Step 3 — VM admin password
 
-Azure requires you to accept the legal terms for the Windows 11 marketplace image before the first deployment. Run this once in your subscription:
+The Azure VM password is **never stored in any file**. Set it as an environment variable before every run:
+
+```powershell
+$env:AZURE_VM_PASSWORD = "YourPassword!2026"
+```
+
+> ⚠️ Azure complexity rules: minimum 12 characters, must include uppercase, lowercase, number, and symbol.
+
+### Step 4 — Accept Windows 11 Marketplace terms (once per subscription)
 
 ```bash
 az vm image terms accept \
@@ -141,122 +388,220 @@ az vm image terms accept \
   --plan win11-24h2-pro
 ```
 
-### 4. Run
+### Step 5 — Initialise Terraform modules
 
 ```bash
-python orchestrator.py
+cd azure    && terraform init && cd ..
+cd aws      && terraform init && cd ..
+cd monolith && terraform init && cd ..
 ```
 
-To tear down all resources afterwards:
+### Step 6 — Validate the full setup
 
 ```bash
-python orchestrator.py --destroy
+python validate.py
+```
+
+Expected output:
+```
+══════════════════════════════════════════════════════════
+  PL-IaC Orchestrator — Pre-flight Validation
+══════════════════════════════════════════════════════════
+
+── Python syntax ──────────────────────────────────────────
+  [PASS]  orchestrator.py
+  [PASS]  benchmark.py
+  [PASS]  inject.py
+  [PASS]  analysis.py
+  [PASS]  validate.py
+
+── Terraform formatting (terraform fmt -check) ────────────
+  [PASS]  azure/
+  [PASS]  aws/
+  [PASS]  monolith/
+
+── Terraform validate ─────────────────────────────────────
+  [PASS]  azure/
+  [PASS]  aws/
+  [PASS]  monolith/
+
+── CLI tools ──────────────────────────────────────────────
+  [PASS]  terraform
+  [PASS]  aws cli
+  [PASS]  azure cli (az)
+
+── Required environment variables ─────────────────────────
+  [PASS]  AZURE_VM_PASSWORD
+  [PASS]  ARM_SUBSCRIPTION_ID
+  [PASS]  AWS_ACCESS_KEY_ID
+  [PASS]  AWS_SECRET_ACCESS_KEY
+  [PASS]  AWS_DEFAULT_REGION
+
+══════════════════════════════════════════════════════════
+  5/5 checks passed
+══════════════════════════════════════════════════════════
+All checks passed. Safe to run benchmark.py.
 ```
 
 ---
 
-## Network Topology
+## Running
 
-| | AWS | Azure |
+### Quick-reference command map
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  python validate.py                  → pre-flight checks            │
+│                                                                     │
+│  python orchestrator.py              → single deploy + verify       │
+│  python orchestrator.py --destroy    → tear down all infrastructure │
+│                                                                     │
+│  python benchmark.py --cycles 30     → Experiment 1 (30 cycles)    │
+│  python benchmark.py --cycles 5      → smoke test (5 cycles)       │
+│                                                                     │
+│  python inject.py --cycles 15        → Experiment 2 (15 cycles)    │
+│  python inject.py --cycles 15 --seed 42  → reproducible run        │
+│                                                                     │
+│  python analysis.py                  → auto-discover latest CSVs   │
+│  python analysis.py --exp1 data/exp1_2026-06-14.csv                │
+│  python analysis.py --exp2 data/exp2_2026-06-14.csv                │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### What each run produces
+
+```
+benchmark.py run                inject.py run               analysis.py run
+──────────────────              ─────────────────           ───────────────
+data/                           data/                       results/figures/
+└── exp1_steady_state_          └── exp2_fault_             ├── exp1_phase_breakdown.png
+    YYYY-MM-DD.csv                  injection_              ├── exp1_total_distribution.png
+    (35 columns,                    YYYY-MM-DD.csv          ├── exp1_prov_vs_proc.png
+     1 row per cycle,               (17 columns,            ├── exp1_convergence.png
+     append-only)                    1 row per cycle)       ├── exp1_rtt_vs_threshold.png
+                                                            ├── exp1_throughput.png
+                                                            ├── exp2_blast_radius.png
+                                                            └── exp2_recovery_time.png
+```
+
+---
+
+## GitHub Actions — Automated Daily Collection
+
+```mermaid
+flowchart TD
+    SCHED(["⏰ Cron: midnight UTC\n+ random 0-4 h offset"])
+    SCHED --> CHK[Checkout repo]
+    CHK --> TOOLS[Install Python · Terraform\nAzure CLI · pip packages]
+    TOOLS --> AUTH[az login\nService Principal]
+    AUTH --> TERMS[Accept Win11\nMarketplace terms]
+    TERMS --> RUN["python benchmark.py --cycles 1\n~1.5-2.5 hours"]
+    RUN -->|success| COMMIT["git add data/\ngit commit\ngit push"]
+    RUN -->|failure| DESTROY["🚨 Emergency destroy\npython orchestrator.py --destroy"]
+    COMMIT --> DONE([✅ Done · CSV updated in repo])
+    DESTROY --> DONE2([⚠️ Done · row missing · resources cleaned])
+```
+
+### Required GitHub Secrets
+
+Navigate to: **Repository → Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret name | Value |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | IAM user access key |
+| `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
+| `ARM_SUBSCRIPTION_ID` | Azure subscription ID |
+| `ARM_TENANT_ID` | Service principal tenant ID |
+| `ARM_CLIENT_ID` | Service principal client ID |
+| `ARM_CLIENT_SECRET` | Service principal client secret |
+| `AZURE_VM_PASSWORD` | VM admin password (complexity rules apply) |
+
+### Controlling the workflow
+
+| Action | How |
+|---|---|
+| ▶️ Start automated collection | Push `daily_benchmark.yml` to main — schedule activates automatically |
+| ⏸ Pause | GitHub → Actions → daily_benchmark → `···` → **Disable workflow** |
+| ▶️ Resume | Same menu → **Enable workflow** |
+| 🖐 Manual run now | GitHub → Actions → daily_benchmark → **Run workflow** |
+| 🔍 View data | `data/exp1_steady_state_YYYY-MM-DD.csv` in the repository |
+
+> Each run appends one row. After 30 days of automated runs you will have 30 independent data points ready for `analysis.py`.
+
+---
+
+## Network Configuration Reference
+
+| Parameter | AWS | Azure |
 |---|---|---|
-| **Region** | ap-southeast-2 (Sydney) | Australia East |
+| **Region** | ap-southeast-2 (Sydney) | australiaeast |
 | **Network CIDR** | 10.1.0.0/16 | 10.2.0.0/16 |
-| **Subnet** | 10.1.1.0/24 | 10.2.1.0/24 |
-| **Gateway Subnet** | — | 10.2.255.0/27 |
-| **VPN Gateway SKU** | Standard | VpnGw1AZ (zone-redundant) |
-| **Test VM** | Windows Server 2022 (Spot, t3.micro) | Windows 11 Pro (Spot, Standard_D2als_v7) |
-| **Tunnel Protocol** | IPsec / IKE | IPsec / IKE |
+| **Workload subnet** | 10.1.1.0/24 | 10.2.1.0/24 |
+| **Gateway subnet** | — | 10.2.255.0/27 |
+| **VPN Gateway SKU** | Standard (VGW) | VpnGw1AZ · zone-redundant |
+| **Gateway mode** | — | Active-active (pip1 + pip2) |
+| **Customer Gateways** | 2 (one per pip) | — |
+| **VPN Connections** | 2 (primary + backup) | 2 (primary + backup) |
+| **BGP ASN** | 65000 (both CGWs) | 65000 |
 | **Routing** | Static | Route-based |
+| **Test VM OS** | Windows Server · Spot · t3.micro | Windows 11 Pro · Spot · D2als_v7 |
+| **iperf3 role** | Server — NSSM Windows service | Client — triggered via az run-command |
+| **VM password source** | N/A (AWS key pair) | `AZURE_VM_PASSWORD` env var |
 
 ---
 
-## ⚠️ Security Warnings (Research Use Only)
+## ⚠️ Security Notes (Research Use Only)
 
-This is a proof-of-concept for academic research. **Do not deploy this in a production environment.**
+> This is a proof-of-concept for academic research. **Do not deploy in production.**
 
-### Hardcoded credentials
-
-The Azure VM password is hardcoded in `azure/main.tf`:
-
-```hcl
-admin_password = "ResearchLab!2026"
-```
-
-In production, this must be replaced with a secret manager reference (Azure Key Vault, AWS Secrets Manager, or a Terraform variable marked `sensitive = true` loaded from a secure store — never committed to source control).
-
-### Open security groups and NSGs
-
-Both the AWS Security Group and the Azure NSG are configured to allow **all inbound and outbound traffic** (`0.0.0.0/0`):
-
-```hcl
-# AWS — open_sg
-protocol    = "-1"
-cidr_blocks = ["0.0.0.0/0"]
-
-# Azure — open_nsg
-source_address_prefix      = "*"
-destination_address_prefix = "*"
-```
-
-This is intentional for research testing so ICMP ping works without firewall interference. In production, restrict rules to the minimum required CIDRs and ports.
-
-### Windows Firewall disabled via user_data
-
-The AWS Windows VM's user_data script disables the Windows Firewall entirely:
-
-```xml
-<powershell>
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
-</powershell>
-```
-
-This is done so ICMP ping replies work immediately without waiting for GPO or manual configuration. In production, keep the Windows Firewall enabled and create specific inbound ICMP rules.
-
-### Hardcoded AMI ID
-
-The AWS Windows Server 2022 AMI is hardcoded:
-
-```hcl
-ami = "ami-094281959696a6b6c"  # ap-southeast-2 only
-```
-
-This AMI ID is region-specific and will become outdated as AWS releases new AMI versions. If this AMI ID is no longer valid, replace it with the latest Windows Server 2022 Base AMI for ap-southeast-2 from the AWS Console under EC2 → AMI Catalog.
+| Warning | Detail |
+|---|---|
+| 🔓 **Open NSG / Security Group** | All inbound/outbound traffic allowed (`0.0.0.0/0`) so ICMP and iperf3 work without interference. Restrict to minimum CIDRs and ports in production. |
+| 🔥 **Windows Firewall disabled** | Both VMs disable the Windows Firewall during provisioning so ICMP replies work immediately. In production, keep the firewall enabled and add specific ICMP inbound rules. |
+| 🖼 **Hardcoded AMI ID** | `ami-094281959696a6b6c` is region-specific (ap-southeast-2) and will expire when AWS deprecates it. Replace with the latest Windows Server AMI for ap-southeast-2 from the AWS Console if apply fails. |
+| 🔑 **Monolith baseline password** | `monolith/main.tf` has a hardcoded `admin_password` because the monolith is purely a comparison baseline used by `inject.py` — it is never deployed outside of Experiment 2. |
 
 ---
 
 ## Known Limitations
 
-- **Azure VPN Gateway takes 30–45 minutes to provision.** This is a fixed Azure platform constraint. The orchestrator waits synchronously — there is no timeout or retry logic.
-- **The 300-second wait in Phase 4 is an estimate.** If the Windows VMs are slow to boot (common with Spot instances), the ping may run before the OS is fully ready. If Phase 4 reports failure, wait a few minutes and manually run `az vm run-command invoke` to re-test.
-- **`Standard_D2als_v7` may not be available in Australia East.** If the Azure apply fails on the VM resource, change the size to `Standard_D2s_v3` in `azure/main.tf`.
-- **Single tunnel only.** The orchestrator uses AWS tunnel 1. AWS VPN Connections provide two tunnels for redundancy — tunnel 2 is provisioned but unused.
-- **No state backend.** Terraform state is stored locally. If the orchestrator is interrupted mid-run, re-running it should be safe but may require manual `terraform destroy` on one or both modules.
+| Limitation | Impact | Notes |
+|---|---|---|
+| Azure VPN GW takes 25–45 min to provision | Phase 1 is the dominant cost in every cycle | Fixed Azure platform constraint; no workaround |
+| Spot instance eviction | ICMP/iperf3 columns may be `null` for that cycle | Provisioning timing data is still recorded; cycle is not lost |
+| `Standard_D2als_v7` availability | Azure apply fails on VM if size unavailable | Change to `Standard_D2s_v3` in `azure/main.tf` |
+| Local Terraform state only | Manual cleanup needed if interrupted mid-cycle | Run `python orchestrator.py --destroy` to recover |
+| AWS AMI may be deprecated | EC2 apply fails with "AMI not found" | Replace AMI ID with current Windows Server for ap-southeast-2 |
 
 ---
 
 ## Cost Estimate
 
-Running one full deploy costs approximately:
+One full deploy-test-destroy cycle takes approximately **1.5–2.5 hours**:
 
-| Resource | Cost |
-|---|---|
-| Azure VpnGw1AZ | ~$0.35 / hour |
-| AWS VPN Connection | ~$0.05 / hour |
-| AWS t3.micro Spot | ~$0.005 / hour |
-| Azure Standard_D2als_v7 Spot | ~$0.04 / hour |
-| **Total** | **~$0.45 / hour** |
+| Resource | Hourly rate | Notes |
+|---|---|---|
+| Azure VpnGw1AZ | ~$0.35 / hr | Provisioning dominates — 25–45 min |
+| AWS VPN Connection × 2 | ~$0.10 / hr | Primary + backup connection |
+| AWS t3.micro Spot | ~$0.005 / hr | iperf3 server |
+| Azure D2als_v7 Spot | ~$0.04 / hr | iperf3 client |
+| **Total** | **~$0.50 / hr** | |
 
-Always run `python orchestrator.py --destroy` when finished to avoid ongoing charges.
+| Experiment | Cycles | Est. duration | Est. cost |
+|---|:---:|---|---|
+| Experiment 1 (benchmark) | 30 | ~45–75 hours | ~$23–$38 |
+| Experiment 2 (fault injection) | 15 | ~8–15 hours | ~$4–$8 |
+| GitHub Actions (1 cycle/day) | 1/day | ~1.5–2.5 hr/day | ~$0.75–$1.25/day |
+
+> Always run `python orchestrator.py --destroy` when finished. The GitHub Actions workflow includes an automatic emergency destroy step on failure.
 
 ---
 
 ## References
 
-This implementation is a proof-of-concept for the research paper:  
-*"Hybrid PL-IaC Approach for Automated Modular Orchestration of Decoupled Multi-Cloud Networks"*
-
 Key design decisions follow:
-- Hauser et al. (2020) — SDN-inspired decoupled control/data plane
-- Rahman et al. (2019) — avoiding hardcoded secrets ("security smells")
-- Pahl et al. (2020) — eliminating configuration drift via programmatic state injection
-- Sokolowski et al. (2023) — decentralised IaC modularisation
+- **Hauser et al. (2020)** — SDN-inspired decoupled control/data plane separation
+- **Rahman et al. (2019)** — avoiding hardcoded secrets ("security smells" in IaC)
+- **Pahl et al. (2020)** — eliminating configuration drift via programmatic state injection
+- **Sokolowski et al. (2023)** — decentralised IaC modularisation patterns
+- **ITU-T G.114** — 150 ms RTT threshold for real-time communications compliance

@@ -1,15 +1,25 @@
-# Terraform state — contains sensitive outputs including the VPN pre-shared key
+# Terraform state — contains live infrastructure IDs and VPN pre-shared keys
 *.tfstate
 *.tfstate.backup
 
-# Runtime-injected variable files written by orchestrator.py
-# The Phase 3 Azure tfvars contains the AWS-generated PSK — never commit this
+# Runtime-injected variable files (written by orchestrator.py at deploy time)
+# Azure terraform.tfvars contains the AWS-generated PSK — never commit this
 **/terraform.tfvars
 
-# Terraform provider plugin downloads (large binaries, not source code)
+# Terraform provider plugin downloads (large binaries)
 **/.terraform/
 **/.terraform.lock.hcl
 
 # Python
 __pycache__/
 *.pyc
+
+# Disk backups written by inject.py before fault injection.
+# Restored automatically on next run if a crash left them behind.
+*.tf.bak
+
+# Experiment data — CSVs are committed so GitHub Actions can accumulate results.
+# Do NOT add data/ here.
+
+# Generated plots — reproducible from CSVs via analysis.py
+results/
