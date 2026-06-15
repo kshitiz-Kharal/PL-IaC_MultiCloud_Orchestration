@@ -105,7 +105,9 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git stash --include-untracked
           git pull --rebase origin "$GITHUB_REF_NAME"
+          git stash pop || true
           git add data/exp2_fault_injection_*.csv
           if git diff --staged --quiet; then
             echo "No new data produced (inject may have failed before writing)."
