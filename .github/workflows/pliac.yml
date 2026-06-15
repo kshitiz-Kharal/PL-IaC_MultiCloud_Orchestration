@@ -20,6 +20,9 @@ on:
         required: true
         default: "42"
 
+permissions:
+  contents: write    # needed to commit CSV data back to the repo
+
 # ── Shared credentials ────────────────────────────────────────────────────────
 # All jobs inherit these.  Set the corresponding secrets in:
 #   Repo → Settings → Secrets and variables → Actions → New repository secret
@@ -97,6 +100,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -125,14 +130,27 @@ jobs:
       - name: Run benchmark
         run: python benchmark.py --cycles ${{ github.event.inputs.benchmark_cycles }}
 
-      # Upload even on failure — CSV is append-only so partial runs are usable.
-      - name: Upload Exp 1 CSV
+      # Commit CSV back to the repo so data accumulates alongside benchmark-daily.yml runs.
+      - name: Commit data to repo
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: exp1-data
-          path: data/exp1_steady_state_*.csv
-          if-no-files-found: warn
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git add data/exp1_steady_state_*.csv
+          if git diff --staged --quiet; then
+            echo "No new data to commit."
+          else
+            TOTAL=$(python3 - <<'EOF'
+          import glob
+          files = glob.glob("data/exp1_steady_state_*.csv")
+          total = sum(max(0, sum(1 for _ in open(f)) - 1) for f in files)
+          print(total)
+          EOF
+            )
+            git commit -m "data(exp1): manual run — ${TOTAL} total cycles [skip ci]"
+            git push origin "$GITHUB_REF_NAME"
+          fi
 
 # ── Job 3: Experiment 2 — Fault Injection ────────────────────────────────────
 # Runs after Exp 1 (not in parallel) to avoid simultaneous full-stack deploys
@@ -145,6 +163,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -177,53 +197,24 @@ jobs:
             --cycles ${{ github.event.inputs.inject_cycles }} \
             --seed   ${{ github.event.inputs.seed }}
 
-      - name: Upload Exp 2 CSV
+      # Commit CSV back to the repo so data accumulates alongside inject-daily.yml runs.
+      - name: Commit data to repo
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: exp2-data
-          path: data/exp2_fault_injection_*.csv
-          if-no-files-found: warn
-
-# ── Job 4: Analysis + Figures ─────────────────────────────────────────────────
-  analyse:
-    name: Analysis and figures
-    needs: [experiment-1, experiment-2]
-    runs-on: ubuntu-latest
-    # Run even if one experiment failed — analysis.py handles missing CSV gracefully.
-    if: always()
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
-      - name: Download Exp 1 CSV
-        uses: actions/download-artifact@v4
-        with:
-          name: exp1-data
-          path: data/
-        continue-on-error: true   # analysis still runs if only Exp 2 succeeded
-
-      - name: Download Exp 2 CSV
-        uses: actions/download-artifact@v4
-        with:
-          name: exp2-data
-          path: data/
-        continue-on-error: true
-
-      - name: Run analysis
-        run: python analysis.py
-
-      - name: Upload figures
-        uses: actions/upload-artifact@v4
-        with:
-          name: figures
-          path: results/figures/
-          if-no-files-found: warn
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git add data/exp2_fault_injection_*.csv
+          if git diff --staged --quiet; then
+            echo "No new data to commit."
+          else
+            TOTAL=$(python3 - <<'EOF'
+          import glob
+          files = glob.glob("data/exp2_fault_injection_*.csv")
+          total = sum(max(0, sum(1 for _ in open(f)) - 1) for f in files)
+          print(total)
+          EOF
+            )
+            git commit -m "data(exp2): manual run — ${TOTAL} total cycles [skip ci]"
+            git push origin "$GITHUB_REF_NAME"
+          fi
