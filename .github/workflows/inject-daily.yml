@@ -94,10 +94,12 @@ jobs:
           terraform -chdir=aws      init -input=false
           terraform -chdir=monolith init -input=false
 
-      # ── Run exactly 1 cycle (fault selected by inject.py's own rotation) ──
+      # ── Run exactly 1 cycle ───────────────────────────────────────────────
+      # Seed = cumulative cycles done so far, so each daily run picks a
+      # different fault instead of always starting from the same RNG state.
       - name: Run fault injection (1 cycle)
         if: steps.count.outputs.done < 15
-        run: python inject.py --cycles 1
+        run: python inject.py --cycles 1 --seed ${{ steps.count.outputs.done }}
 
       # ── Commit CSV back to the repo ───────────────────────────────────────
       - name: Commit data to repo
