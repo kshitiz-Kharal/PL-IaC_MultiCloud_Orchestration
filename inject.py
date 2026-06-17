@@ -417,7 +417,7 @@ def run_experiment(cycles: int, start_index: int, out_path: Path) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Experiment 2: Fault Injection")
-    parser.add_argument("--cycles", type=int, default=9)
+    parser.add_argument("--cycles", type=int, default=18)
     parser.add_argument("--start-index", type=int, default=0,
                         help="Catalogue index to start from (0-based). "
                              "Pass the number of cycles already done so daily "

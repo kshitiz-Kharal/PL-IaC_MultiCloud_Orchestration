@@ -47,17 +47,17 @@ jobs:
           EOF
           )
           echo "done=$DONE" >> "$GITHUB_OUTPUT"
-          echo "Fault-injection cycles already collected: $DONE / 9"
+          echo "Fault-injection cycles already collected: $DONE / 18"
 
       - name: Skip if target reached
-        if: steps.count.outputs.done >= 9
+        if: steps.count.outputs.done >= 18
         run: |
-          echo "9 fault-injection cycles already collected (all faults covered). Nothing to do."
+          echo "18 fault-injection cycles already collected (2 passes, all faults covered). Nothing to do."
           exit 0
 
       # ── Random delay: 0–7199 s (up to 2 hours) ───────────────────────────
       - name: Random start delay
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         run: |
           DELAY=$((RANDOM % 7200))
           echo "Sleeping ${DELAY}s (~$((DELAY/60)) min) before starting..."
@@ -65,22 +65,22 @@ jobs:
 
       # ── Tool setup ────────────────────────────────────────────────────────
       - uses: hashicorp/setup-terraform@v3.1.2
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         with:
           terraform_version: "~1.9"
 
       - uses: actions/setup-python@v5.3.0
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install Python dependencies
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         run: pip install -r requirements.txt
 
       - name: Azure CLI login
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         run: |
           az login --service-principal \
             -u "$ARM_CLIENT_ID" \
@@ -88,7 +88,7 @@ jobs:
             --tenant "$ARM_TENANT_ID"
 
       - name: terraform init
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         run: |
           terraform -chdir=azure    init -input=false
           terraform -chdir=aws      init -input=false
@@ -98,7 +98,7 @@ jobs:
       # start-index = cycles already done, so each daily run picks the next
       # fault in catalogue order — guaranteeing all 9 faults are covered.
       - name: Run fault injection (1 cycle)
-        if: steps.count.outputs.done < 9
+        if: steps.count.outputs.done < 18
         run: python inject.py --cycles 1 --start-index ${{ steps.count.outputs.done }}
 
       # ── Commit CSV back to the repo ───────────────────────────────────────
@@ -121,7 +121,7 @@ jobs:
           print(total)
           EOF
             )
-            git commit -m "data(exp2): fault cycle added — ${TOTAL}/9 total [skip ci]"
+            git commit -m "data(exp2): fault cycle added — ${TOTAL}/18 total [skip ci]"
             git push origin "$GITHUB_REF_NAME"
             echo "Pushed. Total inject cycles in repo: $TOTAL"
           fi
