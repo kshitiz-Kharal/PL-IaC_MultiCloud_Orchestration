@@ -5,7 +5,7 @@ name: Fault Injection — 1 cycle daily (Exp 2)
 # cannot hold an Azure VPN Gateway at the same time.
 #
 # Sleeps a random 0–2 hours for the same reason as benchmark-daily.yml.
-# Self-skips once 15 cycles are in the repo.
+# Self-skips once 9 cycles are in the repo (one per fault in FAULT_CATALOGUE).
 on:
   schedule:
     - cron: '0 7 * * *'
@@ -47,17 +47,17 @@ jobs:
           EOF
           )
           echo "done=$DONE" >> "$GITHUB_OUTPUT"
-          echo "Fault-injection cycles already collected: $DONE / 15"
+          echo "Fault-injection cycles already collected: $DONE / 9"
 
       - name: Skip if target reached
-        if: steps.count.outputs.done >= 15
+        if: steps.count.outputs.done >= 9
         run: |
-          echo "15 fault-injection cycles already collected. Nothing to do."
+          echo "9 fault-injection cycles already collected (all faults covered). Nothing to do."
           exit 0
 
       # ── Random delay: 0–7199 s (up to 2 hours) ───────────────────────────
       - name: Random start delay
-        if: steps.count.outputs.done < 15
+        if: steps.count.outputs.done < 9
         run: |
           DELAY=$((RANDOM % 7200))
           echo "Sleeping ${DELAY}s (~$((DELAY/60)) min) before starting..."
@@ -65,22 +65,22 @@ jobs:
 
       # ── Tool setup ────────────────────────────────────────────────────────
       - uses: hashicorp/setup-terraform@v3.1.2
-        if: steps.count.outputs.done < 15
+        if: steps.count.outputs.done < 9
         with:
           terraform_version: "~1.9"
 
       - uses: actions/setup-python@v5.3.0
-        if: steps.count.outputs.done < 15
+        if: steps.count.outputs.done < 9
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install Python dependencies
-        if: steps.count.outputs.done < 15
+        if: steps.count.outputs.done < 9
         run: pip install -r requirements.txt
 
       - name: Azure CLI login
-        if: steps.count.outputs.done < 15
+        if: steps.count.outputs.done < 9
         run: |
           az login --service-principal \
             -u "$ARM_CLIENT_ID" \
@@ -88,18 +88,18 @@ jobs:
             --tenant "$ARM_TENANT_ID"
 
       - name: terraform init
-        if: steps.count.outputs.done < 15
+        if: steps.count.outputs.done < 9
         run: |
           terraform -chdir=azure    init -input=false
           terraform -chdir=aws      init -input=false
           terraform -chdir=monolith init -input=false
 
       # ── Run exactly 1 cycle ───────────────────────────────────────────────
-      # Seed = cumulative cycles done so far, so each daily run picks a
-      # different fault instead of always starting from the same RNG state.
+      # start-index = cycles already done, so each daily run picks the next
+      # fault in catalogue order — guaranteeing all 9 faults are covered.
       - name: Run fault injection (1 cycle)
-        if: steps.count.outputs.done < 15
-        run: python inject.py --cycles 1 --seed ${{ steps.count.outputs.done }}
+        if: steps.count.outputs.done < 9
+        run: python inject.py --cycles 1 --start-index ${{ steps.count.outputs.done }}
 
       # ── Commit CSV back to the repo ───────────────────────────────────────
       - name: Commit data to repo
@@ -121,7 +121,7 @@ jobs:
           print(total)
           EOF
             )
-            git commit -m "data(exp2): fault cycle added — ${TOTAL}/15 total [skip ci]"
+            git commit -m "data(exp2): fault cycle added — ${TOTAL}/9 total [skip ci]"
             git push origin "$GITHUB_REF_NAME"
             echo "Pushed. Total inject cycles in repo: $TOTAL"
           fi

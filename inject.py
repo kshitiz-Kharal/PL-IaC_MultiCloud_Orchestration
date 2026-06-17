@@ -332,9 +332,14 @@ def measure_recovery_monolith() -> float:
 
 # ── Main experiment loop ──────────────────────────────────────────────────────
 
-def run_experiment(cycles: int, seed: int, out_path: Path) -> None:
+def run_experiment(cycles: int, start_index: int, out_path: Path) -> None:
+    """Run fault injection cycles, selecting faults by index for exhaustive coverage.
+
+    Fault selection: FAULT_CATALOGUE[(start_index + i) % len(FAULT_CATALOGUE)]
+    With 9 faults and cycles=9, every fault is tested exactly once.
+    start_index lets the workflow resume mid-catalogue across daily runs.
+    """
     cleanup_stale_backups()   # recover from any previous hard crash
-    rng = random.Random(seed)
 
     file_exists = out_path.exists()
     with out_path.open("a", newline="", encoding="utf-8") as f:
@@ -343,7 +348,7 @@ def run_experiment(cycles: int, seed: int, out_path: Path) -> None:
             writer.writeheader()
 
         for i in range(1, cycles + 1):
-            fault = rng.choice(FAULT_CATALOGUE)
+            fault = FAULT_CATALOGUE[(start_index + i - 1) % len(FAULT_CATALOGUE)]
             print(f"\n{'='*60}")
             print(f"  FAULT CYCLE {i}/{cycles}  |  {fault['id']} — {fault['description']}")
             print(f"{'='*60}")
@@ -412,19 +417,21 @@ def run_experiment(cycles: int, seed: int, out_path: Path) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Experiment 2: Fault Injection")
-    parser.add_argument("--cycles", type=int, default=15)
-    parser.add_argument("--seed",   type=int, default=42,
-                        help="RNG seed for fault selection (reproducible)")
+    parser.add_argument("--cycles", type=int, default=9)
+    parser.add_argument("--start-index", type=int, default=0,
+                        help="Catalogue index to start from (0-based). "
+                             "Pass the number of cycles already done so daily "
+                             "runs step through the catalogue in order.")
     args = parser.parse_args()
 
     today    = datetime.now().strftime("%Y-%m-%d")
     out_path = DATA_DIR / f"exp2_fault_injection_{today}.csv"
 
-    print(f"Experiment 2 — {args.cycles} cycles, seed={args.seed}")
+    print(f"Experiment 2 — {args.cycles} cycles, start_index={args.start_index}")
     print(f"Fault catalogue: {len(FAULT_CATALOGUE)} entries")
     print(f"Output: {out_path}\n")
 
-    run_experiment(args.cycles, args.seed, out_path)
+    run_experiment(args.cycles, args.start_index, out_path)
 
 
 if __name__ == "__main__":
