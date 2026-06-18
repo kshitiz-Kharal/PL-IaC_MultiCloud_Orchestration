@@ -1,0 +1,2 @@
+cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
+1,2026-06-18T12:26:19.046971+00:00,SYN-01,syntax,Invalid AWS VPC CIDR prefix length (/99),aws/variables.tf,1,0,12,0,1,0.278312718000052,0,0,0,0,1568.9855709680005,
