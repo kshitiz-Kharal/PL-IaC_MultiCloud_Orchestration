@@ -1,0 +1,123 @@
+name: Benchmark — 1 cycle nightly (Exp 1 second run)
+
+# Triggers at 17:00 UTC every day = 03:00 AM Sydney (AEST, UTC+10).
+# This is the second daily Exp 1 run — halves collection time from ~25 to ~13 days.
+# Runs 9 hours before the noon benchmark-daily.yml and 14 hours after Exp 2 finishes,
+# so there is zero overlap risk with any other workflow.
+# Self-skips once 30 cycles are in the repo.
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  workflow_dispatch:     # keep manual trigger for ad-hoc runs
+
+permissions:
+  contents: write
+
+env:
+  AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION:    ap-southeast-2
+  ARM_SUBSCRIPTION_ID:   ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  ARM_CLIENT_ID:         ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET:     ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID:         ${{ secrets.ARM_TENANT_ID }}
+  AZURE_VM_PASSWORD:     ${{ secrets.AZURE_VM_PASSWORD }}
+
+jobs:
+  benchmark:
+    name: Benchmark cycle (night)
+    runs-on: ubuntu-latest
+    timeout-minutes: 200    # 120 min random sleep + ~30 min cycle + buffer
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      # ── Check how many cycles are already in the repo ─────────────────────
+      - name: Count existing cycles
+        id: count
+        run: |
+          DONE=$(python3 - <<'EOF'
+          import glob
+          files = glob.glob("data/exp1_steady_state_*.csv")
+          total = sum(max(0, sum(1 for _ in open(f)) - 1) for f in files)
+          print(total)
+          EOF
+          )
+          echo "done=$DONE" >> "$GITHUB_OUTPUT"
+          echo "Cycles already collected: $DONE / 30"
+
+      - name: Skip if target reached
+        if: steps.count.outputs.done >= 30
+        run: |
+          echo "30 benchmark cycles already collected. Nothing to do."
+          exit 0
+
+      # ── Random delay: 0–7199 s (up to 2 hours) ───────────────────────────
+      - name: Random start delay
+        if: steps.count.outputs.done < 30
+        run: |
+          DELAY=$((RANDOM % 7200))
+          echo "Sleeping ${DELAY}s (~$((DELAY/60)) min) before starting..."
+          sleep "$DELAY"
+
+      # ── Tool setup ────────────────────────────────────────────────────────
+      - uses: hashicorp/setup-terraform@v3.1.2
+        if: steps.count.outputs.done < 30
+        with:
+          terraform_version: "~1.9"
+
+      - uses: actions/setup-python@v5.3.0
+        if: steps.count.outputs.done < 30
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        if: steps.count.outputs.done < 30
+        run: pip install -r requirements.txt
+
+      - name: Azure CLI login
+        if: steps.count.outputs.done < 30
+        run: |
+          az login --service-principal \
+            -u "$ARM_CLIENT_ID" \
+            -p "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID"
+
+      - name: terraform init
+        if: steps.count.outputs.done < 30
+        run: |
+          terraform -chdir=azure init -input=false
+          terraform -chdir=aws   init -input=false
+
+      # ── Run exactly 1 cycle ───────────────────────────────────────────────
+      - name: Run benchmark (1 cycle)
+        if: steps.count.outputs.done < 30
+        run: python benchmark.py --cycles 1
+
+      # ── Commit CSV back to the repo (runs even on benchmark failure) ──────
+      - name: Commit data to repo
+        if: always() && steps.count.outputs.done < 30
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git stash --include-untracked
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git stash pop || true
+          git add data/exp1_steady_state_*.csv
+          if git diff --staged --quiet; then
+            echo "No new data produced (benchmark may have failed before writing)."
+          else
+            TOTAL=$(python3 - <<'EOF'
+          import glob
+          files = glob.glob("data/exp1_steady_state_*.csv")
+          total = sum(max(0, sum(1 for _ in open(f)) - 1) for f in files)
+          print(total)
+          EOF
+            )
+            git commit -m "data(exp1): cycle added — ${TOTAL}/30 total [skip ci]"
+            git push origin "$GITHUB_REF_NAME"
+            echo "Pushed. Total benchmark cycles in repo: $TOTAL"
+          fi
