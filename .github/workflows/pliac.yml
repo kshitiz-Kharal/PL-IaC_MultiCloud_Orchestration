@@ -40,6 +40,7 @@ permissions:
 #     --scopes /subscriptions/<SUBSCRIPTION_ID> --output json
 # Copy appId → ARM_CLIENT_ID, password → ARM_CLIENT_SECRET, tenant → ARM_TENANT_ID
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_DEFAULT_REGION:    ap-southeast-2

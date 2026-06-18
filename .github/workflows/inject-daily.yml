@@ -15,6 +15,7 @@ permissions:
   contents: write
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_DEFAULT_REGION:    ap-southeast-2
@@ -103,7 +104,7 @@ jobs:
 
       # ── Commit CSV back to the repo ───────────────────────────────────────
       - name: Commit data to repo
-        if: always() && steps.count.outputs.done < 15
+        if: always() && steps.count.outputs.done < 18
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
