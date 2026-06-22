@@ -1,0 +1,2 @@
+cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
+1,2026-06-22T14:30:39.591966+00:00,SEM-02,semantic,Azure GatewaySubnet too small — /32 is below /27 minimum,azure/variables.tf,0,1,10,16,1,0.2783905529995536,1,1,27,2,1569.5662605419993,
