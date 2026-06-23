@@ -91,8 +91,8 @@ FAULT_CATALOGUE = [
         "find":    '  default = "10.1.1.0/24"',
         "replace": '  default = "10.9.0.0/24"',
         "mono_file":    "monolith/main.tf",
-        "mono_find":    '  cidr_block        = "10.1.1.0/24"',
-        "mono_replace": '  cidr_block        = "10.9.0.0/24"',
+        "mono_find":    '  cidr_block              = "10.1.1.0/24"',
+        "mono_replace": '  cidr_block              = "10.9.0.0/24"',
     },
     {
         "id": "SEM-02",
@@ -114,8 +114,8 @@ FAULT_CATALOGUE = [
         "find":    '    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]',
         "replace": '    values = ["ubuntu/images/hvm-ssd/ubuntu-totally-wrong-*"]',
         "mono_file":    "monolith/main.tf",
-        "mono_find":    '  ami                    = "ami-0111f46977d33b84b"  # Ubuntu 22.04 LTS ap-southeast-2',
-        "mono_replace": '  ami                    = "ami-00000000000invalid"  # Ubuntu 22.04 LTS ap-southeast-2',
+        "mono_find":    '  ami                    = "ami-0111f46977d33b84b" # Ubuntu 22.04 LTS ap-southeast-2',
+        "mono_replace": '  ami                    = "ami-00000000000invalid" # Ubuntu 22.04 LTS ap-southeast-2',
     },
     {
         "id": "RUN-02",
