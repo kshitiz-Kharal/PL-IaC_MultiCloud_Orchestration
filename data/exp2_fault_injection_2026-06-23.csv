@@ -1,0 +1,2 @@
+cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
+1,2026-06-23T12:24:47.472787+00:00,RUN-01,runtime,"Invalid AWS AMI filter — no AMI matches, data source returns error",aws/main.tf,1,0,12,0,1,0.3019264390004537,1,1,30,2,1546.844288106,
