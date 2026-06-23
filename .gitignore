@@ -23,3 +23,10 @@ __pycache__/
 
 # Generated plots — reproducible from CSVs via analysis.py
 results/
+
+# Claude Code session files
+.claude/
+
+# Stray file created by accidental git log output redirection
+--date=short
+"C:\Users\kshit\OneDrive\Desktop\research\automated multi-cloud orchestrator\ --date=short"
