@@ -1,0 +1,2 @@
+cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
+1,2026-06-24T12:00:34.308318+00:00,RUN-02,runtime,Invalid AWS availability zone — subnet creation fails at runtime,aws/main.tf,1,0,12,13,1,0.275812763000431,1,1,28,2,1463.9205551370014,
