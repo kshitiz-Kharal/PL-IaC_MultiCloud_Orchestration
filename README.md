@@ -13,7 +13,7 @@ graph TB
     subgraph CP["🐍  Control Plane  ·  Python"]
         ORC["orchestrator.py\n─────────────────\nPhases 1 → 4\nState bridging\nTunnel polling\nICMP + iperf3"]
         BM["benchmark.py\n─────────────────\nExp 1 · 30 cycles\nProvisioning latency\nNetwork performance"]
-        INJ["inject.py\n─────────────────\nExp 2 · 15 cycles\nFault injection\nBlast-radius scoring"]
+        INJ["inject.py\n─────────────────\nExp 2 · 18 cycles\nFault injection\nBlast-radius scoring"]
         ANA["analysis.py\n─────────────────\nStatistics\nFigure generation\np95 · IQR · CI"]
     end
 
@@ -66,7 +66,7 @@ graph TB
   ║   │  (az run-command)    │                                ║ ║        ║
   ║   └──────────────────────┘                                ║ ║        ║
   ╚═══════════════════════════════════════════════════════════╪═╪════════╝
-                              IPsec / IKEv1  │ │
+                              IPsec / IKEv2  │ │
                               Static Routing │ │
   ╔═════════════════════════════════════════╪═╪════════════════════════╗
   ║   AWS   ·   ap-southeast-2   ·   VPC 10.1.0.0/16                   ║
@@ -175,7 +175,7 @@ flowchart LR
     C -->|done| A([📊 analysis.py])
 ```
 
-**CSV columns recorded per cycle** (35 total):
+**CSV columns recorded per cycle** (43 total):
 
 | Category | Columns |
 |---|---|
@@ -192,9 +192,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    S([▶ inject.py\n--cycles 15\n--seed 42]) --> CL[🔍 Scan for\nstale .bak files\nrestore if found]
+    S([▶ inject.py\n--cycles 18\n--start-index N]) --> CL[🔍 Scan for\nstale .bak files\nrestore if found]
     CL --> C{cycle\nremaining?}
-    C -->|yes| R[🎲 RNG select\nfault from\ncatalogue]
+    C -->|yes| R[📋 Index-based\nfault select\ncatalogue[N % 9]]
     R --> B["💾 shutil.copy2\nto .tf.bak\n(disk backup)"]
     B --> I[💉 Inject fault\ninto .tf file]
     I --> FW[🏗 Framework test\nDecoupled modules]
@@ -207,11 +207,11 @@ flowchart LR
     C -->|done| A([📊 analysis.py])
 ```
 
-**Fault catalogue** (9 faults · 4 categories · seeded for reproducibility):
+**Fault catalogue** (9 faults · 4 categories · index-based cycling for exhaustive coverage):
 
 | ID | Category | What breaks | Framework blast radius | Monolith blast radius |
 |:---:|:---:|---|:---:|:---:|
-| SYN-01 | 🔴 Syntax | AWS VPC CIDR `/99` (invalid prefix) | AWS only fails | Both fail |
+| SYN-01 | 🔴 Syntax | AWS VPC CIDR `/99` (invalid prefix) | 1 — Azure provisions, AWS plan fails | 0 — plan-time catch, neither provisions |
 | SYN-02 | 🔴 Syntax | Azure VNet CIDR `10.2.0.0/999` | Azure only fails | Both fail |
 | SYN-03 | 🔴 Syntax | EC2 instance type `t99.invalid` | AWS only fails | Both fail |
 | SEM-01 | 🟠 Semantic | AWS subnet outside VPC range | AWS only fails | Both fail |
@@ -227,14 +227,15 @@ flowchart LR
 
 | Figure file | What it shows |
 |---|---|
-| `exp1_phase_breakdown.png` | Per-phase mean duration ± 95% CI bar chart |
+| `exp1_phase_breakdown.png` | Per-phase duration box plot (median, IQR, whiskers) |
 | `exp1_total_distribution.png` | Total provisioning time histogram with mean, median, p95 |
 | `exp1_prov_vs_proc.png` | Stacked bar: Terraform apply vs Python overhead per phase |
 | `exp1_convergence.png` | Tunnel convergence scatter over cycles + box plot |
+| `exp1_qq_plots.png` | Q-Q plots — normality check for 6 key variables |
 | `exp1_rtt_vs_threshold.png` | ICMP RTT per cycle vs ITU-T G.114 150 ms threshold |
 | `exp1_throughput.png` | iperf3 TCP bidirectional throughput per cycle |
 | `exp2_blast_radius.png` | Blast radius grouped bar: framework vs monolith |
-| `exp2_recovery_time.png` | Recovery time box plot: framework vs monolith |
+| `exp2_recovery_time.png` | Recovery time box plot: framework vs monolith (log scale) |
 
 ---
 
@@ -277,8 +278,10 @@ automated multi-cloud orchestrator/
 │   ├── pliac.yml                Manual trigger — custom cycle counts for both experiments
 │   ├── benchmark-daily.yml      1 benchmark cycle/day at random time (02:00–04:00 UTC),
 │   │                            auto-stops after 30 cycles, commits CSV to repo
+│   ├── benchmark-night.yml      1 benchmark cycle/day at random time (17:00–19:00 UTC),
+│   │                            auto-stops after 30 cycles (shared target with benchmark-daily)
 │   └── inject-daily.yml         1 fault-injection cycle/day at random time (07:00–09:00 UTC),
-│                                auto-stops after 15 cycles, commits CSV to repo
+│                                auto-stops after 18 cycles, commits CSV to repo
 │
 ├── 📁  data/                    CSV output — committed to git
 │   ├── exp1_steady_state_YYYY-MM-DD.csv
@@ -442,12 +445,12 @@ All checks passed. Safe to run benchmark.py.
 │  python benchmark.py --cycles 30     → Experiment 1 (30 cycles)    │
 │  python benchmark.py --cycles 5      → smoke test (5 cycles)       │
 │                                                                     │
-│  python inject.py --cycles 15        → Experiment 2 (15 cycles)    │
-│  python inject.py --cycles 15 --seed 42  → reproducible run        │
+│  python inject.py --cycles 18        → Experiment 2 (18 cycles)    │
+│  python inject.py --cycles 1 --start-index N  → single cycle at N  │
 │                                                                     │
 │  python analysis.py                  → auto-discover latest CSVs   │
-│  python analysis.py --exp1 data/exp1_2026-06-14.csv                │
-│  python analysis.py --exp2 data/exp2_2026-06-14.csv                │
+│  python analysis.py --exp1 data/exp1_*.csv                         │
+│  python analysis.py --exp2 data/exp2_*.csv                         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -459,9 +462,10 @@ benchmark.py run                inject.py run               analysis.py run
 data/                           data/                       results/figures/
 └── exp1_steady_state_          └── exp2_fault_             ├── exp1_phase_breakdown.png
     YYYY-MM-DD.csv                  injection_              ├── exp1_total_distribution.png
-    (35 columns,                    YYYY-MM-DD.csv          ├── exp1_prov_vs_proc.png
-     1 row per cycle,               (17 columns,            ├── exp1_convergence.png
-     append-only)                    1 row per cycle)       ├── exp1_rtt_vs_threshold.png
+    (43 columns,                    YYYY-MM-DD.csv          ├── exp1_prov_vs_proc.png
+     1 row per cycle,               (18 columns,            ├── exp1_convergence.png
+     append-only)                    1 row per cycle)       ├── exp1_qq_plots.png
+                                                            ├── exp1_rtt_vs_threshold.png
                                                             ├── exp1_throughput.png
                                                             ├── exp2_blast_radius.png
                                                             └── exp2_recovery_time.png
@@ -474,16 +478,19 @@ data/                           data/                       results/figures/
 ```mermaid
 flowchart TD
     B(["⏰ benchmark-daily.yml\n02:00 UTC + random 0-2 h"])
+    BN(["⏰ benchmark-night.yml\n17:00 UTC + random 0-2 h"])
     I(["⏰ inject-daily.yml\n07:00 UTC + random 0-2 h"])
 
     B --> BCHK[Checkout repo]
+    BN --> BNCHK[Checkout repo]
     BCHK --> BCOUNT{30 cycles\nalready done?}
+    BNCHK --> BCOUNT
     BCOUNT -->|yes| BSKIP([Skip — target reached])
     BCOUNT -->|no| BRUN["python benchmark.py --cycles 1\n~30 min"]
     BRUN -->|always| BCOMMIT["git add data/exp1_*.csv\ngit commit + push"]
 
     I --> ICHK[Checkout repo]
-    ICHK --> ICOUNT{15 cycles\nalready done?}
+    ICHK --> ICOUNT{18 cycles\nalready done?}
     ICOUNT -->|yes| ISKIP([Skip — target reached])
     ICOUNT -->|no| IRUN["python inject.py --cycles 1\n~90 min"]
     IRUN -->|always| ICOMMIT["git add data/exp2_*.csv\ngit commit + push"]
@@ -514,7 +521,7 @@ Navigate to: **Repository → Settings → Secrets and variables → Actions →
 | 🖐 Manual multi-cycle run | GitHub → Actions → `PL-IaC Experiments` → **Run workflow** |
 | 🔍 View accumulated data | `data/` directory in the repository |
 
-> Each daily run appends one row. After 30 days you will have 30 independent benchmark data points, and after 15 days 15 fault-injection data points, ready for `analysis.py`.
+> Each daily run appends one row. Two benchmark workflows (benchmark-daily + benchmark-night) collect ~2 cycles per day, reaching 30 cycles in approximately 15 days. The fault-injection workflow reaches its 18-cycle target after 18 days. All data is then ready for `analysis.py`.
 
 ---
 
@@ -577,18 +584,8 @@ One full deploy-test-destroy cycle takes approximately **1.5–2.5 hours**:
 | Experiment | Cycles | Est. duration | Est. cost |
 |---|:---:|---|---|
 | Experiment 1 (benchmark) | 30 | ~45–75 hours | ~$23–$38 |
-| Experiment 2 (fault injection) | 15 | ~8–15 hours | ~$4–$8 |
+| Experiment 2 (fault injection) | 18 | ~18–27 hours | ~$9–$14 |
 | GitHub Actions (1 cycle/day) | 1/day | ~1.5–2.5 hr/day | ~$0.75–$1.25/day |
 
 > Always run `python orchestrator.py --destroy` when finished. The GitHub Actions workflow includes an automatic emergency destroy step on failure.
 
----
-
-## References
-
-Key design decisions follow:
-- **Hauser et al. (2020)** — SDN-inspired decoupled control/data plane separation
-- **Rahman et al. (2019)** — avoiding hardcoded secrets ("security smells" in IaC)
-- **Pahl et al. (2020)** — eliminating configuration drift via programmatic state injection
-- **Sokolowski et al. (2023)** — decentralised IaC modularisation patterns
-- **ITU-T G.114** — 150 ms RTT threshold for real-time communications compliance
