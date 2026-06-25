@@ -1,0 +1,2 @@
+cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
+1,2026-06-25T11:56:19.663600+00:00,CC-01,cross-cloud,AWS VPN static route CIDR mismatches Azure VNet — routing black hole,aws/main.tf,1,1,12,16,2,0.27444767899942235,1,1,31,2,1537.3997222359994,
