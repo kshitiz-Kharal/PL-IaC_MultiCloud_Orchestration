@@ -194,7 +194,7 @@ flowchart LR
 flowchart LR
     S([▶ inject.py\n--cycles 18\n--start-index N]) --> CL[🔍 Scan for\nstale .bak files\nrestore if found]
     CL --> C{cycle\nremaining?}
-    C -->|yes| R[📋 Index-based\nfault select\ncatalogue[N % 9]]
+    C -->|yes| R["📋 Index-based\nfault select\ncatalogue[N % 9]"]
     R --> B["💾 shutil.copy2\nto .tf.bak\n(disk backup)"]
     B --> I[💉 Inject fault\ninto .tf file]
     I --> FW[🏗 Framework test\nDecoupled modules]
