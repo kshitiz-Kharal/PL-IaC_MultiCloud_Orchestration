@@ -1,0 +1,2 @@
+cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
+1,2026-06-28T09:57:30.135222+00:00,SYN-02,syntax,Invalid Azure VNet CIDR (malformed address),azure/main.tf,0,1,5,16,1,0.3023760159999256,1,1,22,2,1560.2370151189998,
