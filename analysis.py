@@ -280,7 +280,7 @@ def analyse_exp1(paths) -> None:
         data_bp = [df[c].dropna() / 60 for c, _ in phase_cols]
         lbls_bp = [l for _, l in phase_cols]
         fig, ax = plt.subplots(figsize=(10, 5))
-        bp = ax.boxplot(data_bp, labels=lbls_bp, patch_artist=True,
+        bp = ax.boxplot(data_bp, tick_labels=lbls_bp, patch_artist=True,
                         medianprops={"color": "black", "linewidth": 2})
         clrs = ["#2E75B6", "#E07000", "#538135", "#C00000"]
         for patch, c in zip(bp["boxes"], clrs):
@@ -288,95 +288,35 @@ def analyse_exp1(paths) -> None:
             patch.set_alpha(0.7)
         ax.set_ylabel("Duration (minutes)")
         ax.set_title(f"Figure 3: Per-Phase Duration Distribution  (n={n})")
-        ax.yaxis.grid(True, linestyle="--", alpha=0.5)
+        ax.yaxis.grid(True, linestyle="--", alpha=0.2)
         fig.tight_layout()
         out = RESULTS_DIR / "exp1_phase_breakdown.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
         plt.close(fig)
         print(f"\nSaved: {out}")
 
-    # ── Figure 3b: Total provisioning histogram ────────────────────────────────
+    # ── Figure 3b: eCDF of total provisioning time ───────────────────────────
     if "t_total_provisioning_s" in df.columns:
-        s = df["t_total_provisioning_s"].dropna() / 60
-        lo_m, hi_m = ci95(s)
+        s_sorted = np.sort(df["t_total_provisioning_s"].dropna() / 60)
+        n_s = len(s_sorted)
+        y_cdf = np.arange(1, n_s + 1) / n_s
         fig, ax = plt.subplots(figsize=(8, 4))
-        ax.hist(s, bins=10, color="#2E75B6", edgecolor="white", alpha=0.85)
-        ax.axvline(s.mean(),         color="#C00000", lw=2,
-                   label=f"Mean {s.mean():.1f} min")
-        ax.axvline(s.median(),       color="#538135", lw=2, linestyle="--",
-                   label=f"Median {s.median():.1f} min")
-        ax.axvline(s.quantile(0.95), color="#E07000", lw=1.5, linestyle=":",
-                   label=f"p95 {s.quantile(0.95):.1f} min")
-        ax.axvspan(lo_m, hi_m, alpha=0.15, color="#C00000", label="95% CI")
+        ax.step(s_sorted, y_cdf, where="post", color="#2E75B6", lw=2)
+        ax.axvline(np.percentile(s_sorted, 80), color="#E07000", lw=1.5, linestyle=":",
+                   label=f"p80 = {np.percentile(s_sorted, 80):.1f} min")
+        ax.axvline(np.percentile(s_sorted, 95), color="#C00000", lw=1.5, linestyle="--",
+                   label=f"p95 = {np.percentile(s_sorted, 95):.1f} min")
         ax.set_xlabel("Total Provisioning Time (minutes)")
-        ax.set_ylabel("Frequency")
-        ax.set_title(f"Figure 3b: Total Provisioning Time Distribution  (n={n})")
+        ax.set_ylabel("Cumulative Proportion")
+        ax.set_title(f"Figure 3b: eCDF — Total Provisioning Time  (n={n_s})")
         ax.legend()
+        ax.yaxis.grid(True, linestyle="--", alpha=0.2)
         fig.tight_layout()
-        out = RESULTS_DIR / "exp1_total_distribution.png"
+        out = RESULTS_DIR / "exp1_ecdf.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
         plt.close(fig)
         print(f"Saved: {out}")
 
-    # ── Figure 3c: Provisioning vs processing overhead (stacked bar) ──────────
-    prov_triples = [
-        ("t_phase1_prov_s", "t_phase1_proc_s", "Phase 1\nAzure Base"),
-        ("t_phase2_prov_s", "t_phase2_proc_s", "Phase 2\nAWS Deploy"),
-        ("t_phase3_prov_s", "t_phase3_proc_s", "Phase 3\nAzure Connect"),
-    ]
-    prov_triples = [(pv, pr, lb) for pv, pr, lb in prov_triples
-                    if pv in df.columns and pr in df.columns]
-    if prov_triples:
-        fig, ax = plt.subplots(figsize=(9, 5))
-        x        = np.arange(len(prov_triples))
-        pv_means = [df[pv].mean() / 60 for pv, _, _ in prov_triples]
-        pr_means = [df[pr].mean() / 60 for _, pr, _ in prov_triples]
-        lbls     = [lb for _, _, lb in prov_triples]
-        ax.bar(x, pv_means, 0.5, label="Terraform apply (provisioning)", color="#2E75B6")
-        ax.bar(x, pr_means, 0.5, bottom=pv_means,
-               label="Python orchestration (processing)", color="#FFC000")
-        ax.set_xticks(x)
-        ax.set_xticklabels(lbls)
-        ax.set_ylabel("Duration (minutes)")
-        ax.set_title(f"Figure 3c: Provisioning vs Processing Overhead — Mean  (n={n})")
-        ax.legend()
-        ax.yaxis.grid(True, linestyle="--", alpha=0.4)
-        fig.tight_layout()
-        out = RESULTS_DIR / "exp1_prov_vs_proc.png"
-        fig.savefig(str(out), bbox_inches="tight", facecolor="white")
-        plt.close(fig)
-        print(f"Saved: {out}")
-
-    # ── Figure 3d: Tunnel convergence ─────────────────────────────────────────
-    if "tunnel_convergence_s" in df.columns:
-        s = df["tunnel_convergence_s"].dropna()
-        if len(s) > 0:
-            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-            axes[0].plot(range(1, len(s) + 1), s, "o-", color="#2E75B6", ms=5, lw=1.5)
-            axes[0].axhline(s.mean(), color="#C00000", lw=2, linestyle="--",
-                            label=f"Mean {s.mean():.0f}s")
-            axes[0].axhline(s.quantile(0.95), color="#E07000", lw=1.5, linestyle=":",
-                            label=f"p95 {s.quantile(0.95):.0f}s")
-            axes[0].set_xlabel("Cycle")
-            axes[0].set_ylabel("Convergence Time (s)")
-            axes[0].set_title("Tunnel Convergence per Cycle")
-            axes[0].legend()
-            axes[0].yaxis.grid(True, linestyle="--", alpha=0.4)
-            bp = axes[1].boxplot(s, patch_artist=True,
-                                 medianprops={"color": "black", "linewidth": 2})
-            bp["boxes"][0].set_facecolor("#BDD7EE")
-            axes[1].set_xticklabels(["Convergence\nTime"])
-            axes[1].set_ylabel("Seconds")
-            axes[1].set_title(
-                f"Figure 3d: Tunnel Convergence Distribution\n"
-                f"median={s.median():.0f}s  p95={s.quantile(0.95):.0f}s  n={len(s)}"
-            )
-            axes[1].yaxis.grid(True, linestyle="--", alpha=0.4)
-            fig.tight_layout()
-            out = RESULTS_DIR / "exp1_convergence.png"
-            fig.savefig(str(out), bbox_inches="tight", facecolor="white")
-            plt.close(fig)
-            print(f"Saved: {out}")
 
     # ── Figure 3e: Q-Q plots ───────────────────────────────────────────────────
     qq_cols = [
@@ -402,15 +342,16 @@ def analyse_exp1(paths) -> None:
             axes_flat[i].set_title(lbl, fontsize=9)
             axes_flat[i].set_xlabel("Theoretical quantiles", fontsize=8)
             axes_flat[i].set_ylabel("Sample quantiles", fontsize=8)
-            axes_flat[i].grid(True, linestyle="--", alpha=0.4)
+            axes_flat[i].grid(True, linestyle="--", alpha=0.2)
         for j in range(i + 1, len(axes_flat)):
             axes_flat[j].set_visible(False)
         fig.suptitle(f"Figure 3e: Q-Q Plots — Normality Check  (n={n})", fontsize=11)
         fig.tight_layout()
-        out = RESULTS_DIR / "exp1_qq_plots.png"
+        (RESULTS_DIR / "appendix").mkdir(exist_ok=True)
+        out = RESULTS_DIR / "appendix" / "exp1_qq_plots.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
         plt.close(fig)
-        print(f"Saved: {out}")
+        print(f"Saved: {out}  [appendix]")
 
     # ── Figure 4: ICMP RTT vs ITU-T G.114 ─────────────────────────────────────
     if "icmp_rtt_avg_ms" in df.columns:
@@ -418,39 +359,41 @@ def analyse_exp1(paths) -> None:
         fig, ax = plt.subplots(figsize=(8, 4))
         ax.plot(range(1, len(s) + 1), s, "o-", color="#2E75B6", ms=5, lw=1.5,
                 label="ICMP RTT avg (ms)")
-        ax.axhline(ITU_T_THRESHOLD_MS, color="#C00000", lw=2, linestyle="--",
-                   label=f"ITU-T G.114 threshold ({ITU_T_THRESHOLD_MS} ms)")
         ax.axhline(s.quantile(0.95), color="#E07000", lw=1.5, linestyle=":",
                    label=f"p95 ({s.quantile(0.95):.0f} ms)")
-        ax.fill_between(range(1, len(s) + 1), s, ITU_T_THRESHOLD_MS,
-                        where=(s > ITU_T_THRESHOLD_MS),
-                        color="#C00000", alpha=0.2, label="Above threshold")
+        ax.set_ylim(0, 20)
+        ax.annotate(
+            f"ITU-T G.114 limit = {ITU_T_THRESHOLD_MS} ms\n(not shown at this scale)",
+            xy=(0.98, 0.97), xycoords="axes fraction",
+            ha="right", va="top", fontsize=8, color="#C00000",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                      edgecolor="#C00000", alpha=0.8),
+        )
         ax.set_xlabel("Cycle")
         ax.set_ylabel("RTT (ms)")
         ax.set_title("Figure 4: ICMP Round-Trip Time vs ITU-T G.114 Threshold")
         ax.legend()
-        ax.yaxis.grid(True, linestyle="--", alpha=0.4)
+        ax.yaxis.grid(True, linestyle="--", alpha=0.2)
         fig.tight_layout()
         out = RESULTS_DIR / "exp1_rtt_vs_threshold.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
         plt.close(fig)
         print(f"Saved: {out}")
 
-    # ── Figure 5: iperf3 bidirectional throughput ─────────────────────────────
+    # ── Figure 5: TCP throughput box plots ───────────────────────────────────
     if "tcp_az_to_aws_mbps" in df.columns and "tcp_aws_to_az_mbps" in df.columns:
         fwd = df["tcp_az_to_aws_mbps"].dropna()
         rev = df["tcp_aws_to_az_mbps"].dropna()
-        n_  = min(len(fwd), len(rev))
-        fig, ax = plt.subplots(figsize=(10, 4))
-        x = np.arange(n_)
-        w = 0.35
-        ax.bar(x - w / 2, fwd[:n_], w, label="TCP Azure→AWS", color="#2E75B6")
-        ax.bar(x + w / 2, rev[:n_], w, label="TCP AWS→Azure", color="#E07000")
-        ax.set_xlabel("Cycle")
+        fig, ax = plt.subplots(figsize=(6, 5))
+        bp = ax.boxplot([fwd, rev],
+                        tick_labels=["TCP Azure→AWS", "TCP AWS→Azure"],
+                        patch_artist=True,
+                        medianprops={"color": "black", "linewidth": 2})
+        bp["boxes"][0].set_facecolor("#BDD7EE")
+        bp["boxes"][1].set_facecolor("#FFE0B0")
         ax.set_ylabel("Throughput (Mbps)")
-        ax.set_title("Figure 5: iperf3 TCP Bidirectional Throughput")
-        ax.legend()
-        ax.yaxis.grid(True, linestyle="--", alpha=0.4)
+        ax.set_title(f"Figure 5: TCP Bidirectional Throughput  (n={len(fwd)})")
+        ax.yaxis.grid(True, linestyle="--", alpha=0.2)
         fig.tight_layout()
         out = RESULTS_DIR / "exp1_throughput.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
@@ -567,7 +510,7 @@ def analyse_exp2(paths) -> None:
         ax.set_xlabel("Blast Radius Score")
         ax.set_title(f"Figure 6: Blast Radius — Framework vs Monolith  (n={n})")
         ax.legend()
-        ax.yaxis.grid(True, linestyle="--", alpha=0.4)
+        ax.yaxis.grid(True, linestyle="--", alpha=0.2)
         fig.tight_layout()
         out = RESULTS_DIR / "exp2_blast_radius.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
@@ -580,7 +523,7 @@ def analyse_exp2(paths) -> None:
         mo_r = df["mono_recovery_time_s"].dropna() / 60
         fig, ax = plt.subplots(figsize=(6, 5))
         bp = ax.boxplot([fw_r, mo_r],
-                        labels=["PL-IaC\nFramework", "Monolithic\nBaseline"],
+                        tick_labels=["PL-IaC\nFramework", "Monolithic\nBaseline"],
                         patch_artist=True,
                         medianprops={"color": "black", "linewidth": 2})
         bp["boxes"][0].set_facecolor("#BDD7EE")
@@ -588,7 +531,7 @@ def analyse_exp2(paths) -> None:
         ax.set_yscale("log")
         ax.set_ylabel("Recovery Time (minutes, log scale)")
         ax.set_title(f"Figure 7: Recovery Time After Fault Correction  (n={n})")
-        ax.yaxis.grid(True, linestyle="--", alpha=0.4)
+        ax.yaxis.grid(True, linestyle="--", alpha=0.2)
         fig.tight_layout()
         out = RESULTS_DIR / "exp2_recovery_time.png"
         fig.savefig(str(out), bbox_inches="tight", facecolor="white")
