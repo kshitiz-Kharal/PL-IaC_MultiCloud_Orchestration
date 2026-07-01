@@ -1,2 +1,3 @@
 cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azure_provisioned,fw_aws_provisioned,fw_azure_resource_count,fw_aws_resource_count,fw_blast_radius_score,fw_recovery_time_s,mono_azure_provisioned,mono_aws_provisioned,mono_resource_count,mono_blast_radius_score,mono_recovery_time_s,notes
 1,2026-07-01T11:19:39.665362+00:00,SEM-02,semantic,Azure GatewaySubnet too small — /32 is below /27 minimum,azure/variables.tf,0,1,10,16,1,0.27843199100016136,1,1,27,2,1561.429067089,
+1,2026-07-01T13:38:35.960701+00:00,RUN-01,runtime,"Invalid AWS AMI filter — no AMI matches, data source returns error",aws/main.tf,,,,,,,,,,,,"TimeoutExpired(['terraform', 'destroy', '-input=false', '-auto-approve'], 3600)"
