@@ -1,14 +1,16 @@
-name: Fault Injection — 1 cycle daily (Exp 2)
+name: Fault Injection — 3 cycles twice daily (Exp 2)
 
-# Triggers at 07:00 UTC every day — 5 hours after benchmark-daily.yml fires.
-# The benchmark cycle (~30 min) always finishes before inject starts, so both
-# cannot hold an Azure VPN Gateway at the same time.
+# Two triggers per day → 6 inject cycles/day → n=27 (3 passes) in ~3 days.
 #
-# Sleeps a random 0–2 hours for the same reason as benchmark-daily.yml.
-# Self-skips once 9 cycles are in the repo (one per fault in FAULT_CATALOGUE).
+# 09:00 UTC: safely after benchmark-daily (02:00 UTC + max 2h sleep + 33min = done by 04:33)
+# 21:00 UTC: safely after benchmark-night (17:00 UTC + max 2h sleep + 33min = done by 19:33)
+#
+# No random sleep — fault injection timing does not affect blast-radius measurements.
+# Self-skips once 27 cycles are in the repo (3 passes × 9 faults).
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 9 * * *'
+    - cron: '0 21 * * *'
   workflow_dispatch:
 
 permissions:
@@ -29,7 +31,7 @@ jobs:
   inject:
     name: Fault injection cycle
     runs-on: ubuntu-latest
-    timeout-minutes: 300    # 120 min sleep + ~90 min inject cycle + buffer
+    timeout-minutes: 360    # 3 cycles × ~70 min each + setup/teardown overhead
 
     steps:
       - uses: actions/checkout@v4.2.2
@@ -48,40 +50,32 @@ jobs:
           EOF
           )
           echo "done=$DONE" >> "$GITHUB_OUTPUT"
-          echo "Fault-injection cycles already collected: $DONE / 18"
+          echo "Fault-injection cycles already collected: $DONE / 27"
 
       - name: Skip if target reached
-        if: steps.count.outputs.done >= 18
+        if: steps.count.outputs.done >= 27
         run: |
-          echo "18 fault-injection cycles already collected (2 passes, all faults covered). Nothing to do."
+          echo "27 fault-injection cycles already collected (3 passes, all faults covered). Nothing to do."
           exit 0
-
-      # ── Random delay: 0–7199 s (up to 2 hours) ───────────────────────────
-      - name: Random start delay
-        if: steps.count.outputs.done < 18
-        run: |
-          DELAY=$((RANDOM % 7200))
-          echo "Sleeping ${DELAY}s (~$((DELAY/60)) min) before starting..."
-          sleep "$DELAY"
 
       # ── Tool setup ────────────────────────────────────────────────────────
       - uses: hashicorp/setup-terraform@v3.1.2
-        if: steps.count.outputs.done < 18
+        if: steps.count.outputs.done < 27
         with:
           terraform_version: "~1.9"
 
       - uses: actions/setup-python@v5.3.0
-        if: steps.count.outputs.done < 18
+        if: steps.count.outputs.done < 27
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install Python dependencies
-        if: steps.count.outputs.done < 18
+        if: steps.count.outputs.done < 27
         run: pip install -r requirements.txt
 
       - name: Azure CLI login
-        if: steps.count.outputs.done < 18
+        if: steps.count.outputs.done < 27
         run: |
           az login --service-principal \
             -u "$ARM_CLIENT_ID" \
@@ -89,22 +83,22 @@ jobs:
             --tenant "$ARM_TENANT_ID"
 
       - name: terraform init
-        if: steps.count.outputs.done < 18
+        if: steps.count.outputs.done < 27
         run: |
           terraform -chdir=azure    init -input=false
           terraform -chdir=aws      init -input=false
           terraform -chdir=monolith init -input=false
 
-      # ── Run exactly 1 cycle ───────────────────────────────────────────────
-      # start-index = cycles already done, so each daily run picks the next
-      # fault in catalogue order — guaranteeing all 9 faults are covered.
-      - name: Run fault injection (1 cycle)
-        if: steps.count.outputs.done < 18
-        run: python inject.py --cycles 1 --start-index ${{ steps.count.outputs.done }}
+      # ── Run 3 cycles per trigger ──────────────────────────────────────────
+      # start-index = cycles already done → picks next 3 faults in catalogue
+      # order, wrapping modulo 9, guaranteeing all faults are covered each pass.
+      - name: Run fault injection (3 cycles)
+        if: steps.count.outputs.done < 27
+        run: python inject.py --cycles 3 --start-index ${{ steps.count.outputs.done }}
 
       # ── Commit CSV back to the repo ───────────────────────────────────────
       - name: Commit data to repo
-        if: always() && steps.count.outputs.done < 18
+        if: always() && steps.count.outputs.done < 27
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -122,7 +116,7 @@ jobs:
           print(total)
           EOF
             )
-            git commit -m "data(exp2): fault cycle added — ${TOTAL}/18 total [skip ci]"
+            git commit -m "data(exp2): fault cycles added — ${TOTAL}/27 total [skip ci]"
             git push origin "$GITHUB_REF_NAME"
             echo "Pushed. Total inject cycles in repo: $TOTAL"
           fi
