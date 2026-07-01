@@ -2,3 +2,4 @@ cycle,timestamp_utc,fault_id,fault_category,fault_description,fault_file,fw_azur
 1,2026-07-01T11:19:39.665362+00:00,SEM-02,semantic,Azure GatewaySubnet too small — /32 is below /27 minimum,azure/variables.tf,0,1,10,16,1,0.27843199100016136,1,1,27,2,1561.429067089,
 1,2026-07-01T13:38:35.960701+00:00,RUN-01,runtime,"Invalid AWS AMI filter — no AMI matches, data source returns error",aws/main.tf,,,,,,,,,,,,"TimeoutExpired(['terraform', 'destroy', '-input=false', '-auto-approve'], 3600)"
 1,2026-07-01T16:21:58.378438+00:00,RUN-02,runtime,Invalid AWS availability zone — subnet creation fails at runtime,aws/main.tf,0,0,0,13,0,0.30086741800005257,1,1,28,2,1459.0875523790005,
+1,2026-07-01T21:39:53.954011+00:00,CC-01,cross-cloud,AWS VPN static route CIDR mismatches Azure VNet — routing black hole,aws/main.tf,0,1,0,16,1,0.30113366000023234,1,1,31,2,1559.938740524,
