@@ -1,16 +1,23 @@
-name: Fault Injection — 3 cycles twice daily (Exp 2)
+name: Fault Injection — 1 cycle × 6 per day (Exp 2)
 
-# Two triggers per day → 6 inject cycles/day → n=27 (3 passes) in ~3 days.
+# Six independent triggers per day → 6 cycles/day → n=27 (3 passes) in ~3 days.
+# Each trigger runs exactly 1 cycle on a fresh runner with a re-read DONE count.
+# No random sleep — blast-radius is deterministic; timing variation is irrelevant.
 #
-# 09:00 UTC: safely after benchmark-daily (02:00 UTC + max 2h sleep + 33min = done by 04:33)
-# 21:00 UTC: safely after benchmark-night (17:00 UTC + max 2h sleep + 33min = done by 19:33)
+# Slots chosen with ≥27 min clearance from both benchmark workflows and
+# ≥1h50m clearance between consecutive inject triggers (each cycle ~50–70 min):
+#   benchmark-daily:  02:00 UTC + max 2h sleep + 33min cycle = done by 04:33 UTC
+#   benchmark-night:  17:00 UTC + max 2h sleep + 33min cycle = done by 19:33 UTC
 #
-# No random sleep — fault injection timing does not affect blast-radius measurements.
 # Self-skips once 27 cycles are in the repo (3 passes × 9 faults).
 on:
   schedule:
-    - cron: '0 9 * * *'
-    - cron: '0 21 * * *'
+    - cron: '0 5  * * *'
+    - cron: '0 8  * * *'
+    - cron: '0 11 * * *'
+    - cron: '0 14 * * *'
+    - cron: '0 20 * * *'
+    - cron: '0 23 * * *'
   workflow_dispatch:
 
 permissions:
@@ -31,7 +38,7 @@ jobs:
   inject:
     name: Fault injection cycle
     runs-on: ubuntu-latest
-    timeout-minutes: 360    # 3 cycles × ~70 min each + setup/teardown overhead
+    timeout-minutes: 200    # ~70 min inject cycle + setup/teardown overhead
 
     steps:
       - uses: actions/checkout@v4.2.2
@@ -89,12 +96,12 @@ jobs:
           terraform -chdir=aws      init -input=false
           terraform -chdir=monolith init -input=false
 
-      # ── Run 3 cycles per trigger ──────────────────────────────────────────
-      # start-index = cycles already done → picks next 3 faults in catalogue
+      # ── Run exactly 1 cycle ───────────────────────────────────────────────
+      # start-index = cycles already done → picks the next fault in catalogue
       # order, wrapping modulo 9, guaranteeing all faults are covered each pass.
-      - name: Run fault injection (3 cycles)
+      - name: Run fault injection (1 cycle)
         if: steps.count.outputs.done < 27
-        run: python inject.py --cycles 3 --start-index ${{ steps.count.outputs.done }}
+        run: python inject.py --cycles 1 --start-index ${{ steps.count.outputs.done }}
 
       # ── Commit CSV back to the repo ───────────────────────────────────────
       - name: Commit data to repo
